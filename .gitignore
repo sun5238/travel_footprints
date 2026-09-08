@@ -8,7 +8,6 @@ __pycache__/
 
 # Frontend
 node_modules/
-frontend/vendor/maplibre-gl/
 
 # Runtime data (local-first archive; never commit)
 travel_data/

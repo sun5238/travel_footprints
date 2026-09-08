@@ -1,0 +1,21 @@
+# Python
+.pylibs/
+.venv/
+__pycache__/
+*.py[cod]
+.mypy_cache/
+.pytest_cache/
+
+# Frontend
+node_modules/
+frontend/vendor/maplibre-gl/
+
+# Runtime data (local-first archive; never commit)
+travel_data/
+data/
+*.zip
+
+# OS/editor
+.DS_Store
+.idea/
+.vscode/

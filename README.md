@@ -10,28 +10,16 @@
 - **无账号、无登录、无外发数据**：离线底图、零遥测；在线地图/地理编码/LLM 都默认关闭，未与用户确认不引入。
 - 数据自包含：所有文件都在数据根目录（默认 `backend/travel_data/`），迁移 = 拷贝整个目录，或使用导出 zip 全量恢复。
 
-## 快速开始（Linux）
+## 快速开始（Linux / macOS）
 
 环境：Python 3.10+、Node 18+、ffmpeg（可选，用于视频封面帧；缺失时视频缩略图自动跳过）。
 
 ```bash
-# 1) 后端依赖（装入仓库内 .pylibs/，不污染系统环境）
-python3 -m pip install --target .pylibs -r backend/requirements.txt
+# 一键安装依赖（后端 .pylibs/ + 前端 node_modules/ + 离线 vendor）
+./scripts/install.sh
 
-# 2) 前端依赖与本地 vendor（离线运行需要）
-cd frontend
-npm install
-mkdir -p vendor/maplibre
-cp node_modules/vue/dist/vue.global.prod.js vendor/
-cp node_modules/maplibre-gl/dist/maplibre-gl.mjs vendor/maplibre/
-cp node_modules/maplibre-gl/dist/maplibre-gl-shared.mjs vendor/maplibre/
-cp node_modules/maplibre-gl/dist/maplibre-gl-worker.mjs vendor/maplibre/
-cp node_modules/maplibre-gl/dist/maplibre-gl.css vendor/maplibre/
-cd ..
-
-# 3) 启动
-cd backend
-PYTHONPATH=.:../.pylibs python3 -m uvicorn travel.main:app --host 127.0.0.1 --port 8000
+# 启动
+./scripts/run.sh
 ```
 
 浏览器打开 <http://127.0.0.1:8000>。手机访问：同一局域网内换成电脑的局域网 IP（例如 `--host 0.0.0.0`）。数据根目录可用环境变量覆盖：`TRAVEL_DATA_ROOT=/path/to/data`。

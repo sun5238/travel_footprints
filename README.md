@@ -14,6 +14,14 @@
 
 环境：Python 3.10+、Node 18+、ffmpeg（可选，用于视频封面帧；缺失时视频缩略图自动跳过）。
 
+Ubuntu 20.04 默认是 Python 3.8，需要先装 3.10+：
+
+```bash
+sudo add-apt-repository ppa:deadsnakes/ppa
+sudo apt install python3.12
+PYTHON=python3.12 ./scripts/install.sh
+```
+
 ```bash
 # 一键安装依赖（后端 .pylibs/ + 前端 node_modules/ + 离线 vendor）
 ./scripts/install.sh

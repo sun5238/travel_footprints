@@ -23,6 +23,8 @@ MINOR="$(printf '%s' "$PY_VERSION" | cut -d. -f2)"
 if [ "$MAJOR" -lt 3 ] || { [ "$MAJOR" -eq 3 ] && [ "$MINOR" -lt 10 ]; }; then
   echo "    需要 Python 3.10+，当前是 $PY_VERSION。"
   echo "    macOS: brew install python@3.12"
+  echo "    Ubuntu 20.04: sudo add-apt-repository ppa:deadsnakes/ppa && sudo apt install python3.12"
+  echo "    装好后用 PYTHON=python3.12 ./scripts/install.sh 重新运行。"
   exit 1
 fi
 

@@ -19,6 +19,21 @@
 ## 目录约定
 
 - 数据根目录结构见 DESIGN.md 第 3 节；代码中所有数据路径必须源自配置的数据根，禁止直接拼接绝对路径。
+- 测试：后端 pytest 放 `tests/backend/`，前端 node:test 放 `tests/frontend/`；共享种子数据见 `tests/backend/seed.py`（测试自造临时 data_root，不依赖真实数据）。
+
+## 测试范围界限（谁动谁跑，防过度测试）
+
+入口：`./scripts/test.sh [backend|frontend|all]`。**commit 前必须通过本改动对应的测试**：
+
+| 改动范围 | 必须通过的测试 |
+|---|---|
+| 后端 store / API / 数据模型 / schema 迁移 | `backend` 套件全绿；涉数据模型同步更新 DESIGN.md |
+| 前端纯逻辑（frontend/logic.js 内函数） | `frontend` 套件（node --test）全绿 |
+| 前端接口字段消费（app.js 增减读取字段） | `tests/backend/test_frontend_fields.py` 全绿 |
+| 媒体 / 备份相关 | 后端 tests 全绿 |
+| 仅文档 / 脚本，无行为改动 | 不强制，但 commit 说明须注明"无行为改动" |
+
+- 测试数据：全部由 `build_seed` 在临时目录自造（64 条媒体、3 到访城市等），不入库、不碰真实数据；`.pylibs` 缺失时先跑 `./scripts/install.sh`。
 
 ## 开发约定
 

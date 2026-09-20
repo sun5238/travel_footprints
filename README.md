@@ -34,9 +34,12 @@ PYTHON=python3.12 ./scripts/install.sh
 
 ## 测试
 
+在 `backend/` 目录内执行(依赖装在 `backend/.pylibs`,测试目录在项目根的 `tests/backend`):
+
 ```bash
-PYTHONPATH=.:.pylibs python3 -m pytest backend/tests -q
-PYTHONPATH=.:.pylibs python3 -m mypy backend/travel
+cd backend
+PYTHONPATH=.:.pylibs python3 -m pytest ../tests/backend -q
+PYTHONPATH=.:.pylibs python3 -m mypy travel
 ```
 
 ## M1 已实现

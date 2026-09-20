@@ -7,3 +7,7 @@ Pillow
 httpx
 python-multipart
 tzdata
+
+# 开发 / 测试依赖（README 测试命令引用 .pylibs 内的 pytest / mypy）
+pytest>=8
+mypy>=1.10

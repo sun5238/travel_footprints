@@ -1,4 +1,15 @@
 import * as maplibregl from "/vendor/maplibre/maplibre-gl.mjs";
+import {
+  countPending,
+  filterPlaces,
+  filterVisits,
+  fmtDate as tfFmtDate,
+  groupMediaByVisit,
+  indexPlaces,
+  pendingMedia,
+  stars as tfStars,
+  yearsFromVisits,
+} from "/logic.js";
 
 const { createApp, ref, reactive, computed, onMounted, watch, nextTick } = Vue;
 
@@ -53,69 +64,19 @@ createApp({
     const citiesSourceId = "cities";
     const placesSourceId = "places";
 
-    const placeById = computed(() => {
-      const m = new Map();
-      for (const p of places.value) m.set(p.id, p);
-      return m;
-    });
-
-    const mediaByVisit = computed(() => {
-      const m = new Map();
-      for (const item of mediaList.value) {
-        if (item.visit_id == null) continue;
-        if (!m.has(item.visit_id)) m.set(item.visit_id, []);
-        m.get(item.visit_id).push(item);
-      }
-      return m;
-    });
-
-    const years = computed(() => {
-      const ys = new Set();
-      for (const v of visits.value) {
-        const local = v.at && v.at.local;
-        if (local && local.length >= 4) ys.add(local.slice(0, 4));
-      }
-      return [...ys].sort().reverse();
-    });
-
-    const pendingCount = computed(() => {
-      let n = 0;
-      for (const m of mediaList.value) if (m.status === "pending") n += 1;
-      return n;
-    });
-
+    const placeById = computed(() => indexPlaces(places.value));
+    const mediaByVisit = computed(() => groupMediaByVisit(mediaList.value));
     const placeOfVisit = (v) => placeById.value.get(v.place_id);
+    const years = computed(() => yearsFromVisits(visits.value));
+    const pendingCount = computed(() => countPending(mediaList.value));
 
-    const filteredVisits = computed(() => {
-      return visits.value.filter((v) => {
-        const place = placeOfVisit(v);
-        if (filters.year) {
-          const local = v.at && v.at.local;
-          if ((local ? local.slice(0, 4) : "") !== filters.year) return false;
-        }
-        if (filters.cityId && place && String(place.city_id) !== filters.cityId) return false;
-        if (filters.kind && place && place.kind !== filters.kind) return false;
-        if (filters.hasMedia && !(mediaByVisit.value.get(v.id) || []).length) return false;
-        if (filters.q) {
-          const hay = `${v.place_name_snapshot} ${(place && place.name) || ""} ${v.review}`;
-          if (!hay.includes(filters.q)) return false;
-        }
-        return true;
-      });
-    });
+    const filteredVisits = computed(() =>
+      filterVisits({ visits: visits.value, places: places.value, media: mediaList.value, filters })
+    );
 
-    const filteredPlaces = computed(() => {
-      return places.value.filter((p) => {
-        if (filters.cityId && String(p.city_id) !== filters.cityId) return false;
-        if (filters.kind && p.kind !== filters.kind) return false;
-        if (filters.hasMedia) {
-          const ids = new Set(visits.value.filter((v) => v.place_id === p.id).map((v) => v.id));
-          if (!mediaList.value.some((m) => m.visit_id != null && ids.has(m.visit_id))) return false;
-        }
-        if (filters.q && !(p.name + " " + p.note).includes(filters.q)) return false;
-        return true;
-      });
-    });
+    const filteredPlaces = computed(() =>
+      filterPlaces({ places: places.value, visits: visits.value, media: mediaList.value, filters })
+    );
 
     const selectedPlace = computed(() =>
       selectedPlaceId.value != null ? placeById.value.get(selectedPlaceId.value) : null
@@ -400,14 +361,8 @@ createApp({
       }
     }
 
-    function fmtDate(visit) {
-      const local = visit.at && visit.at.local;
-      return local ? local.replace("T", " ").slice(0, 16) : "未记录时间";
-    }
-
-    function stars(n) {
-      return n ? "★".repeat(n) + "☆".repeat(5 - n) : "未评分";
-    }
+    const fmtDate = tfFmtDate;
+    const stars = tfStars;
 
     onMounted(async () => {
       await loadAll();
@@ -460,7 +415,7 @@ createApp({
       fmtDate,
       stars,
       mediaOf: (visitId) => mediaByVisit.value.get(visitId) || [],
-      allPendingMedia: computed(() => mediaList.value.filter((m) => m.status === "pending")),
+      allPendingMedia: computed(() => pendingMedia(mediaList.value)),
     };
   },
   template: `

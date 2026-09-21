@@ -6,6 +6,7 @@ import {
   fmtDate as tfFmtDate,
   groupMediaByVisit,
   indexPlaces,
+  labelStatsWithIcon,
   pendingMedia,
   stars as tfStars,
   yearsFromVisits,
@@ -39,6 +40,25 @@ const ICON_GEAR =
   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 00.3 1.9l.1.1a2 2 0 11-2.8 2.8l-.1-.1a1.7 1.7 0 00-1.9-.3 1.7 1.7 0 00-1 1.5V21a2 2 0 11-4 0v-.1a1.7 1.7 0 00-1-1.6 1.7 1.7 0 00-1.9.3l-.1.1a2 2 0 11-2.8-2.8l.1-.1a1.7 1.7 0 00.3-1.9 1.7 1.7 0 00-1.5-1H3a2 2 0 110-4h.1a1.7 1.7 0 001.6-1 1.7 1.7 0 00-.3-1.9l-.1-.1a2 2 0 112.8-2.8l.1.1a1.7 1.7 0 001.9.3h.1a1.7 1.7 0 001-1.5V3a2 2 0 114 0v.1a1.7 1.7 0 001 1.5h.1a1.7 1.7 0 001.9-.3l.1-.1a2 2 0 112.8 2.8l-.1.1a1.7 1.7 0 00-.3 1.9v.1a1.7 1.7 0 001.5 1H21a2 2 0 110 4h-.1a1.7 1.7 0 00-1.5 1z"/></svg>';
 const KIND_LABEL = { scene: "景点", shop: "店铺", landmark: "地标" };
 
+// M2 活动标签静态目录（草案 §6.1，前端打包，非数据库表）；新标签走目录扩充 + 自由输入
+const LABEL_ICONS = {
+  爬山: "🏔",
+  徒步: "🥾",
+  骑行: "🚴",
+  露营: "⛺",
+  漂流: "🚣",
+  越野跑: "🏃",
+  滑雪: "🎿",
+  溯溪: "💧",
+  古镇: "🏘",
+  美食: "🍜",
+  古迹: "🏛",
+  海滩: "🏖",
+  雪山: "❄",
+  演出: "🎭",
+  城市漫游: "🚶",
+};
+
 createApp({
   setup() {
     const view = ref("board");
@@ -69,6 +89,9 @@ createApp({
     const placeOfVisit = (v) => placeById.value.get(v.place_id);
     const years = computed(() => yearsFromVisits(visits.value));
     const pendingCount = computed(() => countPending(mediaList.value));
+    const labelCards = computed(() =>
+      labelStatsWithIcon((dashboard.value.stats && dashboard.value.stats.label_stats) || [], LABEL_ICONS)
+    );
 
     const filteredVisits = computed(() =>
       filterVisits({ visits: visits.value, places: places.value, media: mediaList.value, filters })
@@ -388,6 +411,7 @@ createApp({
       filters,
       years,
       pendingCount,
+      labelCards,
       KIND_LABEL,
       addCityName,
       addPlaceName,
@@ -479,8 +503,12 @@ createApp({
           <div class="stat"><div class="num">{{ dashboard.stats.places || 0 }}</div><div class="cap">地点</div></div>
           <div class="stat"><div class="num">{{ dashboard.stats.visits || 0 }}</div><div class="cap">到访</div></div>
           <div class="stat"><div class="num">{{ dashboard.stats.media || 0 }}</div><div class="cap">媒体</div></div>
-          <div class="stat"><div class="num">{{ dashboard.stats.trails || 0 }}</div><div class="cap">轨迹</div></div>
-          <div class="stat"><div class="num">{{ dashboard.stats.distance_km != null ? dashboard.stats.distance_km.toFixed(0) : 0 }}</div><div class="cap">公里</div></div>
+        </div>
+        <div v-if="labelCards.length" class="label-stats">
+          <div v-for="ls in labelCards" :key="ls.label" class="stat">
+            <div class="num">{{ ls.icon }} {{ ls.count }}</div>
+            <div class="cap">{{ ls.label }}</div>
+          </div>
         </div>
         <div id="map" class="map"></div>
       </section>

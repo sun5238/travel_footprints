@@ -10,15 +10,17 @@ from sqlalchemy import delete, func, select, update
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.engine import Engine
 
-from . import media as media_lib
 from . import backup
+from . import city_coords as city_coords_table
+from . import media as media_lib
 from .config import DEFAULT_TIMEZONE, ensure_layout, resolve_data_root
 from .db import connect
-from .models import City, Media, Place, StoredFile, Trail, TransportLeg, Trip, Visit
+from .models import City, Media, Place, StoredFile, TransportLeg, Trip, Visit
 from .timeutil import to_epoch, to_local_iso
 
 
-def _parse_tags(raw: str) -> list[str]:
+def _parse_list(raw: str) -> list[str]:
+    """JSON 数组文本 -> list；损坏/非数组返回空（标签与同行人共用）。"""
     try:
         value = json.loads(raw)
         return value if isinstance(value, list) else []
@@ -26,8 +28,16 @@ def _parse_tags(raw: str) -> list[str]:
         return []
 
 
+def _dump_list(values: list[str] | None) -> str:
+    return json.dumps(values or [], ensure_ascii=False)
+
+
+def _parse_tags(raw: str) -> list[str]:
+    return _parse_list(raw)
+
+
 def _dump_tags(tags: list[str] | None) -> str:
-    return json.dumps(tags or [], ensure_ascii=False)
+    return _dump_list(tags)
 
 
 class Archive:
@@ -124,6 +134,11 @@ class Archive:
     def create_city(
         self, name: str, lat: float | None = None, lng: float | None = None, note: str = ""
     ) -> dict[str, Any]:
+        # 城市级点亮兜底（草案 §5）：未显式给坐标时取内置中心坐标表，仅点亮用、不参与识别
+        if lat is None and lng is None:
+            center = city_coords_table.lookup(name)
+            if center is not None:
+                lat, lng = center
         with self._session() as s:
             if s.scalar(select(City).where(City.name == name)) is not None:
                 raise ValueError(f"城市已存在: {name}")
@@ -232,9 +247,17 @@ class Archive:
         rating: int | None = None,
         review: str = "",
         tags: list[str] | None = None,
+        label: str | None = None,
+        companions: list[str] | None = None,
+        pos_kind: str = "none",
+        gpx_path: str | None = None,
+        drawn_geojson: str | None = None,
+        difficulty: str | None = None,
     ) -> dict[str, Any]:
         if rating is not None and not 1 <= rating <= 5:
             raise ValueError("评分需在 1-5 之间")
+        if pos_kind not in ("none", "point", "entry"):
+            raise ValueError(f"未知坐标来源: {pos_kind}")
         with self._session() as s:
             place = s.get(Place, place_id)
             if place is None:
@@ -249,6 +272,12 @@ class Archive:
                 review=review,
                 place_name_snapshot=place.name,
                 tags=_dump_tags(tags),
+                label=label,
+                companions=_dump_list(companions),
+                pos_kind=pos_kind,
+                gpx_path=gpx_path,
+                drawn_geojson=drawn_geojson,
+                difficulty=difficulty,
             )
             s.add(visit)
             s.commit()
@@ -273,6 +302,38 @@ class Archive:
             s.delete(visit)
             s.commit()
 
+    def update_visit(self, visit_id: int, fields: dict[str, Any]) -> dict[str, Any]:
+        """仅更新非 None 字段（Schema Patch 语义，见 TripPatch 先例）；at_local+tz 重算 epoch。"""
+        allowed = {
+            "at_local", "tz", "rating", "review", "tags", "label",
+            "companions", "pos_kind", "gpx_path", "drawn_geojson", "difficulty",
+        }
+        with self._session() as s:
+            visit = s.get(Visit, visit_id)
+            if visit is None:
+                raise ValueError(f"到访记录不存在: {visit_id}")
+            for key, value in fields.items():
+                if key not in allowed or value is None:
+                    continue
+                if key in ("tags", "companions"):
+                    setattr(visit, key, _dump_list(value))
+                elif key == "at_local":
+                    tz = fields.get("tz") or visit.at_tz
+                    visit.at_local = to_local_iso(value, tz)
+                    visit.at_tz = tz
+                    visit.at_epoch = to_epoch(value, tz)
+                elif key == "tz":
+                    visit.at_tz = value
+                    visit.at_epoch = to_epoch(visit.at_local, value)
+                elif key == "rating" and not 1 <= value <= 5:
+                    raise ValueError("评分需在 1-5 之间")
+                elif key == "pos_kind" and value not in ("none", "point", "entry"):
+                    raise ValueError(f"未知坐标来源: {value}")
+                else:
+                    setattr(visit, key, value)
+            s.commit()
+            return _visit_dict(visit)
+
     # ---------- Media ----------
 
     def ingest_media_path(
@@ -290,6 +351,11 @@ class Archive:
     ) -> dict[str, Any]:
         kind = media_lib.detect_kind(filename)
         key = media_lib.compute_dedupe_key(src, kind)
+        # 坐标三级兜底第一级（草案 §3）：照片自带 EXIF GPS 则自动取坐标；读不到/已显式传入则不覆盖
+        if kind == "photo" and gps_lat is None and gps_lng is None:
+            exif_lat, exif_lng, _acc = media_lib.read_exif_gps(src)
+            if exif_lat is not None:
+                gps_lat, gps_lng = exif_lat, exif_lng
         with self._session() as s:
             existing = s.scalar(select(StoredFile).where(StoredFile.dedupe_key == key))
             stored = media_lib.ingest_file(self.root, src, filename, existing)
@@ -347,6 +413,26 @@ class Archive:
             s.delete(item)
             s.commit()
 
+    def batch_media(self, media_ids: list[int], action: str) -> dict[str, int]:
+        """批量操作媒体（草案 §8.2）：unassign=解绑回 pending（不删文件）；delete=删行。单事务。"""
+        if action not in ("unassign", "delete"):
+            raise ValueError(f"未知批量操作: {action}")
+        if not media_ids:
+            raise ValueError("未指定媒体")
+        with self._session() as s:
+            rows = s.scalars(select(Media).where(Media.id.in_(media_ids))).all()
+            if len(rows) != len(set(media_ids)):
+                raise ValueError("存在不存在的媒体 id")
+            if action == "unassign":
+                for item in rows:
+                    item.visit_id = None
+                    item.status = "pending"
+            else:
+                for item in rows:
+                    s.delete(item)
+            s.commit()
+        return {"updated": len(rows)}
+
     def ensure_thumb(self, media_id: int) -> str | None:
         pair = self.get_media(media_id)
         if pair is None:
@@ -375,6 +461,12 @@ class Archive:
                 )
                 or 0
             )
+            label_rows = s.execute(
+                select(Visit.label, func.count())
+                .where(Visit.label.isnot(None))
+                .group_by(Visit.label)
+                .order_by(func.count().desc())
+            ).all()
             stats = {
                 "cities_lit": lit_city_count,
                 "cities": int(s.scalar(select(func.count(City.id))) or 0),
@@ -384,10 +476,8 @@ class Archive:
                 "media_pending": int(
                     s.scalar(select(func.count(Media.id)).where(Media.status == "pending")) or 0
                 ),
-                "trails": int(s.scalar(select(func.count(Trail.id))) or 0),
-                "distance_km": float(
-                    s.scalar(select(func.coalesce(func.sum(Trail.distance_m), 0) / 1000.0)) or 0.0
-                ),
+                # M2：轨迹并入 visit，按主活动标签聚合（爬山 X 次…）；M2 不设轨迹/里程卡
+                "label_stats": [{"label": label, "count": int(count)} for label, count in label_rows],
             }
             trips = [
                 _trip_dict(t)
@@ -397,7 +487,7 @@ class Archive:
             ]
         return {"stats": stats, "lit_cities": self.list_cities(lit_only=True), "recent_trips": trips}
 
-    # ---------- 交通段 / 轨迹（M3 使用，先落表） ----------
+    # ---------- 交通段（M2 用之；轨迹已并入 visit，见 import-draft §7） ----------
 
     def create_leg(
         self,
@@ -410,6 +500,7 @@ class Archive:
         tz: str = DEFAULT_TIMEZONE,
         note: str = "",
         sort_order: int = 0,
+        price: float | None = None,
     ) -> dict[str, Any]:
         leg = TransportLeg(
             trip_id=trip_id,
@@ -424,6 +515,7 @@ class Archive:
             arrive_epoch=to_epoch(arrive_local, tz),
             note=note,
             sort_order=sort_order,
+            price=price,
         )
         with self._session() as s:
             s.add(leg)
@@ -434,6 +526,35 @@ class Archive:
         with self._session() as s:
             rows = s.scalars(select(TransportLeg).where(TransportLeg.trip_id == trip_id).order_by(TransportLeg.sort_order)).all()
             return [_leg_dict(leg) for leg in rows]
+
+    def update_leg(self, leg_id: int, fields: dict[str, Any]) -> dict[str, Any]:
+        """仅更新非 None 字段；出发/到达时刻 + tz 重算 epoch。"""
+        allowed = {
+            "from_text", "to_text", "mode", "depart_local", "arrive_local",
+            "tz", "note", "sort_order", "price",
+        }
+        with self._session() as s:
+            leg = s.get(TransportLeg, leg_id)
+            if leg is None:
+                raise ValueError(f"交通段不存在: {leg_id}")
+            for key, value in fields.items():
+                if key not in allowed or value is None:
+                    continue
+                if key in ("depart_local", "arrive_local"):
+                    col = "depart" if key == "depart_local" else "arrive"
+                    tz = fields.get("tz") or getattr(leg, f"{col}_tz")
+                    setattr(leg, key, to_local_iso(value, tz))
+                    setattr(leg, f"{col}_tz", tz)
+                    setattr(leg, f"{col}_epoch", to_epoch(value, tz))
+                elif key == "tz":
+                    leg.depart_tz = value
+                    leg.arrive_tz = value
+                    leg.depart_epoch = to_epoch(leg.depart_local, value)
+                    leg.arrive_epoch = to_epoch(leg.arrive_local, value)
+                else:
+                    setattr(leg, key, value)
+            s.commit()
+            return _leg_dict(leg)
 
     # ---------- 备份 ----------
 
@@ -497,6 +618,12 @@ def _visit_dict(v: Visit) -> dict[str, Any]:
         "review": v.review,
         "place_name_snapshot": v.place_name_snapshot,
         "tags": _parse_tags(v.tags),
+        "label": v.label,
+        "companions": _parse_list(v.companions),
+        "pos_kind": v.pos_kind,
+        "gpx_path": v.gpx_path,
+        "drawn_geojson": v.drawn_geojson,
+        "difficulty": v.difficulty,
         "created_epoch": v.created_epoch,
     }
 
@@ -528,4 +655,5 @@ def _leg_dict(leg: TransportLeg) -> dict[str, Any]:
         "arrive": {"local": leg.arrive_local, "epoch": leg.arrive_epoch},
         "note": leg.note,
         "sort_order": leg.sort_order,
+        "price": leg.price,
     }

@@ -66,6 +66,91 @@ def test_media_upload_thumb_and_dedupe(client, photo_bytes):
     assert thumb_resp.headers["content-type"] == "image/jpeg"
 
 
+def test_import_parse_returns_draft(client):
+    resp = client.post("/api/import/parse", json={"text": "# 国庆\n@2026-10-01 ~ 2026-10-07\n@成都"})
+    assert resp.status_code == 200
+    draft = resp.json()
+    assert draft["title"] == "国庆"
+    assert draft["trip_range"]["start_date"] == "2026-10-01"
+    assert [c["name"] for c in draft["cities"]] == ["成都"]
+
+
+def test_visit_patch_roundtrip(client):
+    place = client.post("/api/places", json={"name": "宽窄巷子", "kind": "scene"}).json()
+    visit = client.post(
+        f"/api/places/{place['id']}/visits",
+        json={"at_local": "2026-10-01T14:20:00", "rating": 4, "label": "古镇", "companions": ["小明"]},
+    ).json()
+    assert visit["label"] == "古镇"
+    assert visit["companions"] == ["小明"]
+
+    original_local = visit["at"]["local"]
+    patched = client.patch(
+        f"/api/visits/{visit['id']}",
+        json={"rating": 5, "label": "爬山", "pos_kind": "point", "review": "不错"},
+    ).json()
+    assert patched["rating"] == 5
+    assert patched["label"] == "爬山"
+    assert patched["pos_kind"] == "point"
+    assert patched["at"]["local"] == original_local  # 未动时间
+
+
+def test_visit_patch_invalid_rating_422(client):
+    # rating 由 Pydantic ge/le 校验（与 VisitIn 同一口径），越界返回 422
+    place = client.post("/api/places", json={"name": "长江索道", "kind": "scene"}).json()
+    visit = client.post(f"/api/places/{place['id']}/visits", json={}).json()
+    resp = client.patch(f"/api/visits/{visit['id']}", json={"rating": 9})
+    assert resp.status_code == 422
+
+
+def test_leg_patch_roundtrip(client):
+    trip = client.post("/api/trips", json={"name": "成都行"}).json()
+    leg = client.post(
+        f"/api/trips/{trip['id']}/legs",
+        json={"from_text": "重庆北", "to_text": "成都东", "mode": "高铁", "price": 154.5},
+    ).json()
+    assert leg["price"] == 154.5
+    patched = client.patch(
+        f"/api/legs/{leg['id']}", json={"mode": "动车", "price": 126.0, "note": "转到东站"}
+    ).json()
+    assert patched["mode"] == "动车"
+    assert patched["price"] == 126.0
+    assert patched["note"] == "转到东站"
+
+
+def test_media_batch_unassign_and_delete(client, photo_bytes):
+    city = client.post("/api/cities", json={"name": "成都"}).json()
+    place = client.post("/api/places", json={"name": "锦里", "kind": "scene", "city_id": city["id"]}).json()
+    visit = client.post(f"/api/places/{place['id']}/visits", json={}).json()
+
+    ids = []
+    for i in range(3):
+        resp = client.post(
+            "/api/media",
+            files={"file": (f"shot{i}.png", io.BytesIO(photo_bytes), "image/png")},
+            data={"visit_id": str(visit["id"])},
+        )
+        ids.append(resp.json()["id"])
+    assert all(m["status"] == "attached" for m in client.get("/api/media").json())
+
+    # unassign：解绑回 pending，不删文件
+    resp = client.patch("/api/media/batch", json={"ids": ids[:2], "action": "unassign"})
+    assert resp.status_code == 200
+    rows = client.get("/api/media").json()
+    detached = [m for m in rows if m["id"] in ids[:2]]
+    assert all(m["status"] == "pending" and m["visit_id"] is None for m in detached)
+
+    # delete：删除剩余 1 条
+    client.patch("/api/media/batch", json={"ids": [ids[2]], "action": "delete"})
+    after = {m["id"] for m in client.get("/api/media").json()}
+    assert ids[2] not in after and ids[0] in after
+
+
+def test_media_batch_unknown_action_400(client):
+    resp = client.patch("/api/media/batch", json={"ids": [1], "action": "explode"})
+    assert resp.status_code == 422  # Literal 校验层
+
+
 def test_restore_replaces_data(client, data_root, photo_bytes):
     city = client.post("/api/cities", json={"name": "成都"}).json()
     place = client.post("/api/places", json={"name": "宽窄巷子", "kind": "scene", "city_id": city["id"]}).json()

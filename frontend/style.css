@@ -232,6 +232,14 @@ label {
   color: var(--muted);
 }
 
+/* M2 活动标签计数卡（label_stats）：有数据才显示，图标来自前端静态目录 */
+.label-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
 .detail {
   display: flex;
   flex-direction: column;

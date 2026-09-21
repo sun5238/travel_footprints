@@ -72,6 +72,13 @@ class Visit(Base):
     review: Mapped[str] = mapped_column(Text, default="")
     place_name_snapshot: Mapped[str] = mapped_column(Text, default="")
     tags: Mapped[str] = mapped_column(Text, default="[]")
+    # --- M2 增量（import-draft §6/§7）---
+    label: Mapped[str | None] = mapped_column(Text, nullable=True)  # 主活动标签（看板聚合，轨迹必填）
+    companions: Mapped[str] = mapped_column(Text, default="[]")  # 同行人，JSON 数组
+    pos_kind: Mapped[str] = mapped_column(Text, default="none")  # none | point | entry（坐标来源）
+    gpx_path: Mapped[str | None] = mapped_column(Text, nullable=True)  # 轨迹增强：GPX 相对路径
+    drawn_geojson: Mapped[str | None] = mapped_column(Text, nullable=True)  # 轨迹增强：手绘轨迹
+    difficulty: Mapped[str | None] = mapped_column(Text, nullable=True)  # 轨迹增强：难度
     created_epoch: Mapped[float] = mapped_column(Float, default=_now_epoch)
 
 
@@ -91,28 +98,7 @@ class TransportLeg(Base):
     arrive_epoch: Mapped[float | None] = mapped_column(Float, nullable=True)
     note: Mapped[str] = mapped_column(Text, default="")
     sort_order: Mapped[int] = mapped_column(Integer, default=0)
-
-
-class Trail(Base):
-    __tablename__ = "trail"
-
-    id: Mapped[int] = mapped_column(primary_key=True)
-    trip_id: Mapped[int | None] = mapped_column(ForeignKey("trip.id", ondelete="SET NULL"), nullable=True)
-    name: Mapped[str] = mapped_column(Text, default="")
-    start_local: Mapped[str | None] = mapped_column(Text, nullable=True)
-    start_tz: Mapped[str] = mapped_column(Text, default=DEFAULT_TIMEZONE)
-    start_epoch: Mapped[float | None] = mapped_column(Float, nullable=True)
-    end_local: Mapped[str | None] = mapped_column(Text, nullable=True)
-    end_tz: Mapped[str] = mapped_column(Text, default=DEFAULT_TIMEZONE)
-    end_epoch: Mapped[float | None] = mapped_column(Float, nullable=True)
-    summit_local: Mapped[str | None] = mapped_column(Text, nullable=True)
-    summit_tz: Mapped[str] = mapped_column(Text, default=DEFAULT_TIMEZONE)
-    summit_epoch: Mapped[float | None] = mapped_column(Float, nullable=True)
-    gpx_path: Mapped[str | None] = mapped_column(Text, nullable=True)
-    drawn_geojson: Mapped[str | None] = mapped_column(Text, nullable=True)
-    distance_m: Mapped[float | None] = mapped_column(Float, nullable=True)
-    elevation_gain_m: Mapped[float | None] = mapped_column(Float, nullable=True)
-    note: Mapped[str] = mapped_column(Text, default="")
+    price: Mapped[float | None] = mapped_column(Float, nullable=True)  # 票价（M2，可空）
 
 
 class StoredFile(Base):

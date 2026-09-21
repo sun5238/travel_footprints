@@ -25,6 +25,48 @@ def detect_kind(filename: str) -> str:
     raise ValueError(f"不支持的媒体类型: {filename}")
 
 
+# EXIF GPSInfo IFD 标签号：1=纬度参照(N/S) 2=纬度 3=经度参照(E/W) 4=经度
+_GPS_IFD = 0x8825
+_GPS_LAT_REF, _GPS_LAT = 1, 2
+_GPS_LNG_REF, _GPS_LNG = 3, 4
+
+
+def _dms_to_decimal(gps_ifd: dict, ref: int, coord: int) -> float | None:
+    try:
+        ref_value = gps_ifd.get(ref)
+        parts = gps_ifd.get(coord)
+        if not parts:
+            return None
+        deg = float(parts[0]) if parts[0] is not None else 0.0
+        minutes = float(parts[1]) if len(parts) > 1 and parts[1] is not None else 0.0
+        seconds = float(parts[2]) if len(parts) > 2 and parts[2] is not None else 0.0
+        value = deg + minutes / 60.0 + seconds / 3600.0
+        return -value if ref_value in ("S", "W") else value
+    except (TypeError, ValueError, IndexError):
+        return None
+
+
+def read_exif_gps(src: Path) -> tuple[float | None, float | None, float | None]:
+    """读照片 EXIF GPS（Pillow，纯本地）；读不到/损坏返回 (None,None,None)，不抛错。
+
+    坐标字段可能为 IFDRational（int/float 可直接转）或 (num, den) 形式，均先 float() 归一。
+    """
+    try:
+        from PIL import Image
+
+        with Image.open(src) as im:
+            gps = im.getexif().get_ifd(_GPS_IFD)
+            if not gps:
+                return None, None, None
+            lat = _dms_to_decimal(gps, _GPS_LAT_REF, _GPS_LAT)
+            lng = _dms_to_decimal(gps, _GPS_LNG_REF, _GPS_LNG)
+            if lat is None or lng is None:
+                return None, None, None
+            return lat, lng, None
+    except Exception:
+        return None, None, None
+
+
 def photo_key(data: bytes) -> str:
     return f"p:{hashlib.sha256(data).hexdigest()}"
 

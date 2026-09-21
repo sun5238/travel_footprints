@@ -10,6 +10,7 @@ import {
   fmtDate,
   groupMediaByVisit,
   indexPlaces,
+  labelStatsWithIcon,
   pendingMedia,
   stars,
   yearsFromVisits,
@@ -129,4 +130,25 @@ test("stars：满 5 颗、缺星补 ☆、无评分显示占位", () => {
   assert.equal(stars(5), "★★★★★");
   assert.equal(stars(4), "★★★★☆");
   assert.equal(stars(null), "未评分");
+});
+
+// ---- labelStatsWithIcon ----
+const LABEL_ICONS = { 爬山: "🏔", 古镇: "🏘", 美食: "🍜" };
+test("labelStatsWithIcon：附加静态图标", () => {
+  const out = labelStatsWithIcon(
+    [{ label: "爬山", count: 3 }, { label: "古镇", count: 2 }],
+    LABEL_ICONS
+  );
+  assert.deepEqual(out, [
+    { label: "爬山", count: 3, icon: "🏔" },
+    { label: "古镇", count: 2, icon: "🏘" },
+  ]);
+});
+test("labelStatsWithIcon：目录外标签用兜底图标", () => {
+  const out = labelStatsWithIcon([{ label: "自定义X", count: 1 }], LABEL_ICONS);
+  assert.equal(out[0].icon, "🏷");
+});
+test("labelStatsWithIcon：空数组/缺省返回空", () => {
+  assert.deepEqual(labelStatsWithIcon([], LABEL_ICONS), []);
+  assert.deepEqual(labelStatsWithIcon(undefined, LABEL_ICONS), []);
 });

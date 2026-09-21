@@ -56,7 +56,8 @@ TRIPS = [
     ("周末广州行", "广州两日", "2025-03-14T09:00:00", "2025-03-16T18:00:00", ["周末", "广州"]),
 ]
 
-# 到访：地点名 -> [(at_local, rating, review, trip_key|None)]
+# 到访：地点名 -> [(at_local, rating, review, trip_key|None, label|None)]
+# label 系数条（row[4]）有值仅该条带主活动标签，用于断言 label_stats 聚合。
 VISITS = {
     "宽窄巷子": [
         ("2024-10-02T20:00:00", 4, "人多但值得", "trip1"),
@@ -68,9 +69,9 @@ VISITS = {
         ("2024-10-04T12:00:00", 5, "一路吃过去，凉糕最好吃", "trip1"),
         ("2025-02-16T11:30:00", 3, "", None),
     ],
-    "洪崖洞": [("2024-10-05T20:30:00", 5, "夜景像宫崎骏", "trip1")],
+    "洪崖洞": [("2024-10-05T20:30:00", 5, "夜景像宫崎骏", "trip1", "城市漫游")],
     "磁器口古镇": [
-        ("2024-10-06T10:00:00", 5, "古镇很热闹", "trip1"),
+        ("2024-10-06T10:00:00", 5, "古镇很热闹", "trip1", "古镇"),
         ("2025-04-05T15:00:00", None, "", None),
     ],
     "朝天门": [("2024-10-06T17:30:00", 4, "", "trip1")],
@@ -83,9 +84,9 @@ VISITS = {
     "点都德茶楼": [("2025-03-16T09:30:00", 5, "早茶好吃", "trip2")],
 }
 
-# 交通段：(trip_key, from, to, mode, depart, arrive, sort)
+# 交通段：(trip_key, from, to, mode, depart, arrive, sort[, price])
 LEGS = [
-    ("trip1", "北京", "成都", "高铁", "2024-10-01T08:00:00", "2024-10-01T16:30:00", 0),
+    ("trip1", "北京", "成都", "高铁", "2024-10-01T08:00:00", "2024-10-01T16:30:00", 0, 154.5),
     ("trip1", "成都", "重庆", "飞机", "2024-10-05T09:00:00", "2024-10-05T10:10:00", 1),
     ("trip1", "重庆", "成都", "自驾", "2024-10-06T12:00:00", "2024-10-06T17:00:00", 2),
     ("trip2", "深圳", "广州", "大巴", "2025-03-14T08:30:00", "2025-03-14T10:30:00", 0),
@@ -147,13 +148,16 @@ def build_seed(archive: Archive, tmp: Path) -> dict[str, object]:
     for place_name, rows in VISITS.items():
         place_id = places[place_name]["id"]
         visit_ids = []
-        for at_local, rating, review, trip_key in rows:
+        for row in rows:
+            at_local, rating, review, trip_key = row[:4]
+            label = row[4] if len(row) > 4 else None
             visit = archive.create_visit(
                 place_id,
                 trip_id=trips[trip_key]["id"] if trip_key else None,
                 at_local=at_local,
                 rating=rating,
                 review=review,
+                label=label,
             )
             visits.append(visit)
             visit_ids.append(visit["id"])
@@ -178,7 +182,9 @@ def build_seed(archive: Archive, tmp: Path) -> dict[str, object]:
     media.append(_media_item(archive, tmp, order + 1, city_id=cities["成都"]["id"], taken_at_local="2025-03-17T09:00:00"))
 
     legs: list[dict[str, object]] = []
-    for trip_key, frm, to, mode, depart, arrive, sort_order in LEGS:
+    for row in LEGS:
+        trip_key, frm, to, mode, depart, arrive, sort_order = row[:7]
+        price = row[7] if len(row) > 7 else None
         legs.append(
             archive.create_leg(
                 trips[trip_key]["id"],
@@ -188,6 +194,7 @@ def build_seed(archive: Archive, tmp: Path) -> dict[str, object]:
                 depart_local=depart,
                 arrive_local=arrive,
                 sort_order=sort_order,
+                price=price,
             )
         )
 

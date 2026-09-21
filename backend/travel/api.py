@@ -8,7 +8,20 @@ from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse
 
 from .config import DEFAULT_TIMEZONE
-from .schemas import CityIn, LegIn, PlaceIn, PlacePatch, TripIn, TripPatch, VisitIn
+from .parser import parse_text
+from .schemas import (
+    CityIn,
+    LegIn,
+    LegPatch,
+    MediaBatchIn,
+    ParseIn,
+    PlaceIn,
+    PlacePatch,
+    TripIn,
+    TripPatch,
+    VisitIn,
+    VisitPatch,
+)
 from .store import Archive
 
 router = APIRouter()
@@ -25,6 +38,12 @@ def _bad(exc: ValueError) -> HTTPException:
 @router.get("/health")
 def health() -> dict[str, object]:
     return {"ok": True}
+
+
+@router.post("/import/parse")
+def parse_note(payload: ParseIn) -> dict[str, object]:
+    """便签文本 → 骨架草案（只切不认，先展示后入库；不落库）。"""
+    return parse_text(payload.text, tz=payload.tz)
 
 
 @router.get("/dashboard")
@@ -156,6 +175,12 @@ def create_visit(place_id: int, payload: VisitIn, request: Request) -> dict[str,
             rating=payload.rating,
             review=payload.review,
             tags=payload.tags,
+            label=payload.label,
+            companions=payload.companions,
+            pos_kind=payload.pos_kind,
+            gpx_path=payload.gpx_path,
+            drawn_geojson=payload.drawn_geojson,
+            difficulty=payload.difficulty,
         )
     except ValueError as exc:
         raise _bad(exc) from exc
@@ -170,6 +195,15 @@ def list_visits(request: Request, trip_id: int | None = None) -> list[dict[str, 
 def delete_visit(visit_id: int, request: Request) -> None:
     try:
         _archive(request).delete_visit(visit_id)
+    except ValueError as exc:
+        raise _bad(exc) from exc
+
+
+@router.patch("/visits/{visit_id}")
+def update_visit(visit_id: int, payload: VisitPatch, request: Request) -> dict[str, object]:
+    fields = {k: v for k, v in payload.model_dump().items() if v is not None}
+    try:
+        return _archive(request).update_visit(visit_id, fields)
     except ValueError as exc:
         raise _bad(exc) from exc
 
@@ -245,6 +279,14 @@ def delete_media(media_id: int, request: Request) -> None:
         raise _bad(exc) from exc
 
 
+@router.patch("/media/batch")
+def batch_media(payload: MediaBatchIn, request: Request) -> dict[str, int]:
+    try:
+        return _archive(request).batch_media(payload.ids, payload.action)
+    except ValueError as exc:
+        raise _bad(exc) from exc
+
+
 @router.post("/trips/{trip_id}/legs", status_code=201)
 def create_leg(trip_id: int, payload: LegIn, request: Request) -> dict[str, object]:
     try:
@@ -258,6 +300,7 @@ def create_leg(trip_id: int, payload: LegIn, request: Request) -> dict[str, obje
             tz=payload.tz,
             note=payload.note,
             sort_order=payload.sort_order,
+            price=payload.price,
         )
     except ValueError as exc:
         raise _bad(exc) from exc
@@ -266,6 +309,15 @@ def create_leg(trip_id: int, payload: LegIn, request: Request) -> dict[str, obje
 @router.get("/trips/{trip_id}/legs")
 def list_legs(trip_id: int, request: Request) -> list[dict[str, object]]:
     return _archive(request).list_legs(trip_id)
+
+
+@router.patch("/legs/{leg_id}")
+def update_leg(leg_id: int, payload: LegPatch, request: Request) -> dict[str, object]:
+    fields = {k: v for k, v in payload.model_dump().items() if v is not None}
+    try:
+        return _archive(request).update_leg(leg_id, fields)
+    except ValueError as exc:
+        raise _bad(exc) from exc
 
 
 @router.get("/backup")

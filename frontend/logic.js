@@ -84,3 +84,13 @@ export function fmtDate(visit) {
 export function stars(n) {
   return n ? "★".repeat(n) + "☆".repeat(5 - n) : "未评分";
 }
+
+// label_stats（后端 dashboard.stats.label_stats，[{label, count}]）-> 附加静态图标
+// 图标目录是前端打包的静态表（草案 §6.1），缺省用兜底「🏷」。
+export function labelStatsWithIcon(labelStats, catalog = {}) {
+  return (labelStats || []).map((ls) => ({
+    label: ls.label,
+    count: ls.count,
+    icon: catalog[ls.label] || "🏷",
+  }));
+}

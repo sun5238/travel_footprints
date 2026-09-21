@@ -58,6 +58,28 @@ class VisitIn(BaseModel):
     rating: int | None = Field(default=None, ge=1, le=5)
     review: str = ""
     tags: list[str] = []
+    # M2（import-draft §7）：主活动标签 / 同行人 / 坐标来源 / 轨迹增强
+    label: str | None = None
+    companions: list[str] = []
+    pos_kind: Literal["none", "point", "entry"] = "none"
+    gpx_path: str | None = None
+    drawn_geojson: str | None = None
+    difficulty: str | None = None
+
+
+class VisitPatch(BaseModel):
+    trip_id: int | None = None
+    at_local: str | None = None
+    tz: str | None = None
+    rating: int | None = Field(default=None, ge=1, le=5)
+    review: str | None = None
+    tags: list[str] | None = None
+    label: str | None = None
+    companions: list[str] | None = None
+    pos_kind: Literal["none", "point", "entry"] | None = None
+    gpx_path: str | None = None
+    drawn_geojson: str | None = None
+    difficulty: str | None = None
 
 
 class LegIn(BaseModel):
@@ -69,3 +91,26 @@ class LegIn(BaseModel):
     tz: str = DEFAULT_TIMEZONE
     note: str = ""
     sort_order: int = 0
+    price: float | None = None
+
+
+class LegPatch(BaseModel):
+    from_text: str | None = None
+    to_text: str | None = None
+    mode: str | None = None
+    depart_local: str | None = None
+    arrive_local: str | None = None
+    tz: str | None = None
+    note: str | None = None
+    sort_order: int | None = None
+    price: float | None = None
+
+
+class MediaBatchIn(BaseModel):
+    ids: list[int]
+    action: Literal["unassign", "delete"]
+
+
+class ParseIn(BaseModel):
+    text: str
+    tz: str = DEFAULT_TIMEZONE

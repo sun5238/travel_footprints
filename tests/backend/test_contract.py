@@ -17,14 +17,16 @@ PLACE_KEYS = {"id", "city_id", "kind", "name", "lat", "lng", "note", "lit", "vis
 VISIT_KEYS = {
     "id", "place_id", "trip_id", "at", "rating", "review",
     "place_name_snapshot", "tags", "created_epoch",
+    # M2：主活动标签 / 同行人 / 坐标来源 / 轨迹增强（import-draft §7）
+    "label", "companions", "pos_kind", "gpx_path", "drawn_geojson", "difficulty",
 }
 MEDIA_KEYS = {
     "id", "kind", "status", "visit_id", "trip_id", "city_id",
     "taken_at", "gps", "size_bytes", "file", "thumb",
 }
-LEG_KEYS = {"id", "trip_id", "from", "to", "mode", "depart", "arrive", "note", "sort_order"}
+LEG_KEYS = {"id", "trip_id", "from", "to", "mode", "depart", "arrive", "note", "sort_order", "price"}
 TRIP_KEYS = {"id", "name", "note", "start", "end", "tags", "created_epoch", "updated_epoch"}
-DASH_STATS_KEYS = {"cities_lit", "cities", "places", "visits", "media", "media_pending", "trails", "distance_km"}
+DASH_STATS_KEYS = {"cities_lit", "cities", "places", "visits", "media", "media_pending", "label_stats"}
 
 # 种子数据规模（seed.py 校验后的基准值）
 EXPECTED = {
@@ -66,11 +68,21 @@ def test_dashboard_contract(seeded_client):
     assert isinstance(dash["stats"]["visits"], int)
     assert isinstance(dash["stats"]["media"], int)
     assert isinstance(dash["stats"]["media_pending"], int)
-    assert isinstance(dash["stats"]["trails"], int)
-    assert isinstance(dash["stats"]["distance_km"], float)
+    assert isinstance(dash["stats"]["label_stats"], list)
 
     assert dash["stats"]["cities_lit"] == EXPECTED["lit_cities"]
     assert dash["stats"]["media_pending"] == EXPECTED["media_pending"]
+
+
+def test_dashboard_label_stats_contract(seeded_client):
+    label_stats = seeded_client.get("/api/dashboard").json()["stats"]["label_stats"]
+    assert isinstance(label_stats, list)
+    for entry in label_stats:
+        assert set(entry) == {"label", "count"}  # icon 由前端静态标签目录映射
+        assert isinstance(entry["label"], str) and isinstance(entry["count"], int)
+    by_label = {e["label"]: e["count"] for e in label_stats}
+    assert by_label.get("古镇") == 1
+    assert by_label.get("城市漫游") == 1
 
 
 def test_dashboard_lit_cities_contract(seeded_client):
@@ -166,6 +178,13 @@ def test_visits_contract(seeded_client):
         assert isinstance(v["review"], str)
         assert isinstance(v["place_name_snapshot"], str) and v["place_name_snapshot"]
         assert isinstance(v["tags"], list)
+        # M2 新属性形态
+        assert isinstance(v["label"], (str, type(None)))
+        assert isinstance(v["companions"], list)
+        assert v["pos_kind"] in ("none", "point", "entry")
+        assert isinstance(v["gpx_path"], (str, type(None)))
+        assert isinstance(v["drawn_geojson"], (str, type(None)))
+        assert isinstance(v["difficulty"], (str, type(None)))
         if v["at"]["local"] and len(v["at"]["local"]) >= 4:
             years.add(v["at"]["local"][:4])
     assert has_null_rating  # 无评分分支
@@ -262,7 +281,9 @@ def test_legs_contract(seeded_client):
         _assert_subkeys(leg, LEG_KEYS)
         assert isinstance(leg["from"], str) and isinstance(leg["to"], str)
         assert isinstance(leg["sort_order"], int)
+        assert isinstance(leg["price"], (int, float, type(None)))
     assert [l["sort_order"] for l in trip1_legs] == sorted(l["sort_order"] for l in trip1_legs)
+    assert any(l["mode"] == "高铁" and l["price"] == 154.5 for l in trip1_legs)
 
     trip2_legs = seeded_client.get(f"/api/trips/{by_name['周末广州行']['id']}/legs").json()
     assert {l["mode"] for l in trip2_legs} == {"大巴", "飞机"}
@@ -291,8 +312,7 @@ def test_empty_db_zero_shape(client):
     assert dash["stats"]["visits"] == 0
     assert dash["stats"]["media"] == 0
     assert dash["stats"]["media_pending"] == 0
-    assert dash["stats"]["trails"] == 0
-    assert dash["stats"]["distance_km"] == 0.0
+    assert dash["stats"]["label_stats"] == []
     assert dash["lit_cities"] == []
     assert dash["recent_trips"] == []
     assert client.get("/api/media").json() == []

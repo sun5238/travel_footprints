@@ -83,3 +83,35 @@ def test_delete_place_detaches_media_and_visits(archive: Archive, tmp_path, phot
     assert archive.list_visits(place_id=place["id"]) == []
     pending = archive.list_media(status="pending")
     assert len(pending) == 1 and pending[0]["visit_id"] is None
+
+
+def test_create_city_autofills_center_coords(archive: Archive):
+    city = archive.create_city("成都")
+    assert city["lat"] is not None and city["lng"] is not None
+    assert abs(city["lat"] - 30.5723) < 0.01
+    assert abs(city["lng"] - 104.0668) < 0.01
+
+
+def test_unknown_city_keeps_null_coords(archive: Archive):
+    city = archive.create_city("某个小镇")
+    assert city["lat"] is None and city["lng"] is None
+
+
+def test_explicit_coords_win_over_static_table(archive: Archive):
+    city = archive.create_city("成都", lat=1.0, lng=2.0)
+    assert city["lat"] == 1.0 and city["lng"] == 2.0
+
+
+def test_dashboard_label_stats_groups_by_label(archive: Archive):
+    place = archive.create_place("磁器口古镇", kind="scene")
+    for at, label in [
+        ("2024-10-06T10:00:00", "古镇"),
+        ("2024-10-07T10:00:00", "古镇"),
+        ("2024-10-08T10:00:00", "爬山"),
+        ("2024-10-09T10:00:00", None),
+    ]:
+        archive.create_visit(place["id"], at_local=at, label=label)
+    stats = archive.dashboard()["stats"]
+    assert stats["label_stats"] == [{"label": "古镇", "count": 2}, {"label": "爬山", "count": 1}]
+    # M2：轨迹并入 visit，看板不再有轨迹数/总里程
+    assert "distance_km" not in stats and "trails" not in stats

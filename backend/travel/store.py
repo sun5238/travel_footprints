@@ -13,9 +13,27 @@ from sqlalchemy.engine import Engine
 from . import backup
 from . import city_coords as city_coords_table
 from . import media as media_lib
+from .routing import RoutingGraph, plan_route
+from .routebook_pack import read_routebook_zip, write_routebook_zip
 from .config import DEFAULT_TIMEZONE, ensure_layout, resolve_data_root
 from .db import connect
-from .models import City, Media, Place, StoredFile, TransportLeg, Trip, Visit
+from .models import (
+    City,
+    Media,
+    Place,
+    RouteBook,
+    RoutePoint,
+    RouteStop,
+    StoredFile,
+    TransportLeg,
+    Trip,
+    Visit,
+    _now_epoch,
+)
+
+_MODES = ("driving", "cycling", "walking")
+_POS_KINDS = ("none", "city", "exact")
+_STOP_TYPES = ("charging", "fuel", "scene", "lodging")
 from .timeutil import to_epoch, to_local_iso
 
 
@@ -40,13 +58,90 @@ def _dump_tags(tags: list[str] | None) -> str:
     return _dump_list(tags)
 
 
+def _norm_route_points(points: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
+    for i, p in enumerate(points or []):
+        pos_kind = (p.get("pos_kind") or "none").lower()
+        stop_type = p.get("stop_type")
+        if pos_kind not in _POS_KINDS:
+            raise ValueError(f"未知坐标来源: {pos_kind}")
+        if stop_type is not None and stop_type not in _STOP_TYPES:
+            raise ValueError(f"未知停靠类型: {stop_type}")
+    return [
+        {
+            "seq": i,
+            "name": (p.get("name") or ""),
+            "lat": p.get("lat"),
+            "lng": p.get("lng"),
+            "pos_kind": (p.get("pos_kind") or "none").lower(),
+            "stop_type": p.get("stop_type"),
+            "stop_name": (p.get("stop_name") or ""),
+            "stop_note": (p.get("stop_note") or ""),
+        }
+        for i, p in enumerate(points or [])
+    ]
+
+
+def _norm_route_stops(stops: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
+    for i, st in enumerate(stops or []):
+        pos_kind = (st.get("pos_kind") or "none").lower()
+        stop_type = (st.get("stop_type") or "scene").lower()
+        if pos_kind not in _POS_KINDS:
+            raise ValueError(f"未知坐标来源: {pos_kind}")
+        if stop_type not in _STOP_TYPES:
+            raise ValueError(f"未知停靠类型: {stop_type}")
+    return [
+        {
+            "seq": i,
+            "name": (st.get("name") or ""),
+            "lat": st.get("lat"),
+            "lng": st.get("lng"),
+            "pos_kind": (st.get("pos_kind") or "none").lower(),
+            "stop_type": (st.get("stop_type") or "scene").lower(),
+            "stop_note": (st.get("stop_note") or ""),
+        }
+        for i, st in enumerate(stops or [])
+    ]
+
+
+def _fetch_route_points(s: Session, routebook_id: int) -> list[dict[str, Any]]:
+    rows = s.scalars(
+        select(RoutePoint).where(RoutePoint.routebook_id == routebook_id).order_by(RoutePoint.seq)
+    ).all()
+    return [_point_dict(p) for p in rows]
+
+
+def _fetch_route_stops(s: Session, routebook_id: int) -> list[dict[str, Any]]:
+    rows = s.scalars(
+        select(RouteStop).where(RouteStop.routebook_id == routebook_id).order_by(RouteStop.seq)
+    ).all()
+    return [_stop_dict(st) for st in rows]
+
+
+def _replace_route_points(s: Session, routebook_id: int, points: list[dict[str, Any]]) -> None:
+    s.execute(delete(RoutePoint).where(RoutePoint.routebook_id == routebook_id))
+    for p in points:
+        s.add(RoutePoint(routebook_id=routebook_id, **p))
+
+
+def _replace_route_stops(s: Session, routebook_id: int, stops: list[dict[str, Any]]) -> None:
+    s.execute(delete(RouteStop).where(RouteStop.routebook_id == routebook_id))
+    for st in stops:
+        s.add(RouteStop(routebook_id=routebook_id, **st))
+
+
 class Archive:
     """一个数据根目录 = 一个 Archive 实例；所有路径相对，绝对路径只在本类内从数据根推导。"""
 
-    def __init__(self, data_root: str | Path | None = None) -> None:
+    def __init__(
+        self,
+        data_root: str | Path | None = None,
+        routing_graph: RoutingGraph | None = None,
+    ) -> None:
         self.root = resolve_data_root(data_root)
         ensure_layout(self.root)
         self._engine, self._factory = connect(self.root)
+        # M4 路书：轻量路由图（真实图来自区域路网包构建工具，ADR-0008）
+        self._routing_graph = routing_graph
 
     def close(self) -> None:
         self._engine.dispose()
@@ -556,6 +651,162 @@ class Archive:
             s.commit()
             return _leg_dict(leg)
 
+    # ---------- 路书（M4，独立模块；ADR-0008） ----------
+
+    def create_routebook(
+        self,
+        name: str,
+        mode: str = "driving",
+        preset: str = "balanced",
+        points: list[dict[str, Any]] | None = None,
+        stops: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        if mode not in _MODES:
+            raise ValueError(f"未知模式: {mode}")
+        norm_points = _norm_route_points(points)
+        norm_stops = _norm_route_stops(stops)
+        with self._session() as s:
+            book = RouteBook(name=name, mode=mode, preset=preset)
+            s.add(book)
+            s.flush()
+            for p in norm_points:
+                s.add(RoutePoint(routebook_id=book.id, **p))
+            for st in norm_stops:
+                s.add(RouteStop(routebook_id=book.id, **st))
+            s.commit()
+            # 返回落库后的真实行（含 DB 分配的 id），与 get_routebook 形状一致
+            points = _fetch_route_points(s, book.id)
+            stops = _fetch_route_stops(s, book.id)
+            return _routebook_dict(book, points, stops)
+
+    def recalc_routebook(self, routebook_id: int) -> dict[str, Any]:
+        """按当前途经点/模式/档位重算引擎线（S3）。
+
+        - 无路网图 → 报错（需安装区域路网包）。
+        - 段不可达 / 有坐标点不足 2 个 → 报错，不落库。
+        - 引擎线落 geometry_source=engine；若为用户覆盖线则不重算（S4 语义）。
+        - 手动里程（mileage_manual）不被重算吞掉。
+        """
+        with self._session() as s:
+            book = s.get(RouteBook, routebook_id)
+            if book is None:
+                raise ValueError(f"路书不存在: {routebook_id}")
+            points = _fetch_route_points(s, routebook_id)
+            stops = _fetch_route_stops(s, routebook_id)
+            if book.geometry_source == "override":
+                raise ValueError("当前为手绘覆盖线，重算不会覆盖；如需引擎线请先清除覆盖")
+        if self._routing_graph is None:
+            raise ValueError("未配置路网图（请先安装区域路网包）")
+        pois = [
+            (st["lat"], st["lng"]) for st in stops if st["lat"] is not None and st["lng"] is not None
+        ]
+        planned = plan_route(
+            self._routing_graph,
+            points,
+            mode=book.mode,
+            preset=book.preset,
+            pois=pois or None,
+        )
+        if planned is None:
+            raise ValueError("无法生成路线：坐标不足或段不可达，请补充/调整途经点")
+        with self._session() as s:
+            book = s.get(RouteBook, routebook_id)
+            assert book is not None  # 上面已验存在
+            book.geometry_source = "engine"
+            book.geometry_json = json.dumps(planned["line"], ensure_ascii=False)
+            if not book.mileage_manual:
+                book.mileage_km = planned["distance_km"]
+            book.updated_epoch = _now_epoch()
+            s.commit()
+            points = _fetch_route_points(s, routebook_id)
+            stops = _fetch_route_stops(s, routebook_id)
+            return _routebook_dict(book, points, stops)
+
+    def list_routebooks(self) -> list[dict[str, Any]]:
+        with self._session() as s:
+            rows = s.scalars(
+                select(RouteBook).order_by(RouteBook.updated_epoch.desc(), RouteBook.id.desc())
+            ).all()
+            return [_routebook_header(b) for b in rows]
+
+    def get_routebook(self, routebook_id: int) -> dict[str, Any] | None:
+        with self._session() as s:
+            book = s.get(RouteBook, routebook_id)
+            if book is None:
+                return None
+            points = _fetch_route_points(s, routebook_id)
+            stops = _fetch_route_stops(s, routebook_id)
+            return _routebook_dict(book, points, stops)
+
+    def update_routebook(self, routebook_id: int, fields: dict[str, Any]) -> dict[str, Any]:
+        allowed = {
+            "name", "mode", "preset", "mileage_km", "mileage_manual",
+            "geometry_source", "geometry_json",
+        }
+        with self._session() as s:
+            book = s.get(RouteBook, routebook_id)
+            if book is None:
+                raise ValueError(f"路书不存在: {routebook_id}")
+            if "mode" in fields and fields["mode"] is not None:
+                if fields["mode"] not in _MODES:
+                    raise ValueError(f"未知模式: {fields['mode']}")
+            if "geometry_source" in fields and fields["geometry_source"] is not None:
+                if fields["geometry_source"] not in ("engine", "override"):
+                    raise ValueError(f"未知几何来源: {fields['geometry_source']}")
+            for key, value in fields.items():
+                if key in allowed and value is not None:
+                    setattr(book, key, value)
+            if "mileage_km" in fields and "mileage_manual" not in fields:
+                # 显式给出里程即视为手动值（真值重算时不吞掉，见 S4）；
+                # 导入还原时可显式带 mileage_manual，精确复原
+                book.mileage_manual = fields["mileage_km"] is not None
+            if "points" in fields and fields["points"] is not None:
+                _replace_route_points(s, routebook_id, _norm_route_points(fields["points"]))
+            if "stops" in fields and fields["stops"] is not None:
+                _replace_route_stops(s, routebook_id, _norm_route_stops(fields["stops"]))
+            book.updated_epoch = _now_epoch()
+            s.commit()
+            points = _fetch_route_points(s, routebook_id)
+            stops = _fetch_route_stops(s, routebook_id)
+            return _routebook_dict(book, points, stops)
+
+    def export_routebook(self, routebook_id: int) -> Path:
+        """把路书打成自包含 zip（exports/routebook-<id>.zip）。"""
+        book = self.get_routebook(routebook_id)
+        if book is None:
+            raise ValueError(f"路书不存在: {routebook_id}")
+        dest = self.root / "exports" / f"routebook-{routebook_id}.zip"
+        return write_routebook_zip(book, dest)
+
+    def import_routebook(self, zip_path: Path) -> dict[str, Any]:
+        """导入路书包 → 新建一本（同名不覆盖），还原几何/里程精确态。"""
+        data = read_routebook_zip(zip_path)
+        book = self.create_routebook(
+            data["name"],
+            mode=data["mode"],
+            preset=data["preset"],
+            points=data["points"],
+            stops=data["stops"],
+        )
+        fields: dict[str, Any] = {}
+        if data.get("geometry_json"):
+            fields["geometry_json"] = data["geometry_json"]
+            fields["geometry_source"] = data["geometry_source"]
+        if data.get("mileage_km") is not None:
+            fields["mileage_km"] = data["mileage_km"]
+            fields["mileage_manual"] = data["mileage_manual"]
+        if fields:
+            return self.update_routebook(book["id"], fields)
+        return book
+
+    def delete_routebook(self, routebook_id: int) -> None:
+        with self._session() as s:
+            book = s.get(RouteBook, routebook_id)
+            if book is None:
+                raise ValueError(f"路书不存在: {routebook_id}")
+            s.delete(book)  # 途经点/停靠由 FK ON DELETE CASCADE 级联清理
+            s.commit()
+
     # ---------- 备份 ----------
 
     def export_to(self, dest: Path) -> Path:
@@ -578,6 +829,60 @@ def _trip_dict(t: Trip) -> dict[str, Any]:
         "tags": _parse_tags(t.tags),
         "created_epoch": t.created_epoch,
         "updated_epoch": t.updated_epoch,
+    }
+
+
+def _parse_geojson(raw: str | None) -> Any | None:
+    if not raw:
+        return None
+    try:
+        return json.loads(raw)
+    except ValueError:
+        return None
+
+
+def _routebook_header(b: RouteBook) -> dict[str, Any]:
+    return {
+        "id": b.id,
+        "name": b.name,
+        "mode": b.mode,
+        "preset": b.preset,
+        "mileage_km": b.mileage_km,
+        "mileage_manual": b.mileage_manual,
+        "geometry": {"source": b.geometry_source, "geojson": _parse_geojson(b.geometry_json)},
+        "created_epoch": b.created_epoch,
+        "updated_epoch": b.updated_epoch,
+    }
+
+
+def _routebook_dict(
+    book: RouteBook, points: list[dict[str, Any]], stops: list[dict[str, Any]]
+) -> dict[str, Any]:
+    return {**_routebook_header(book), "points": points, "stops": stops}
+
+
+def _point_dict(p: RoutePoint) -> dict[str, Any]:
+    return {
+        "id": p.id,
+        "name": p.name,
+        "lat": p.lat,
+        "lng": p.lng,
+        "pos_kind": p.pos_kind,
+        "stop_type": p.stop_type,
+        "stop_name": p.stop_name,
+        "stop_note": p.stop_note,
+    }
+
+
+def _stop_dict(st: RouteStop) -> dict[str, Any]:
+    return {
+        "id": st.id,
+        "name": st.name,
+        "lat": st.lat,
+        "lng": st.lng,
+        "pos_kind": st.pos_kind,
+        "stop_type": st.stop_type,
+        "stop_note": st.stop_note,
     }
 
 

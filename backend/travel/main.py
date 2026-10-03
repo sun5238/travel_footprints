@@ -10,13 +10,17 @@ from fastapi.staticfiles import StaticFiles
 
 from .api import router
 from .config import resolve_data_root
+from .routing import RoutingGraph
 from .store import Archive
 
 FRONTEND_DIR = Path(__file__).resolve().parents[2] / "frontend"
 
 
-def create_app(data_root: str | Path | None = None) -> FastAPI:
-    archive = Archive(data_root)
+def create_app(
+    data_root: str | Path | None = None,
+    routing_graph: RoutingGraph | None = None,
+) -> FastAPI:
+    archive = Archive(data_root, routing_graph=routing_graph)
     app = FastAPI(title="Travel Footprints", version="0.1.0")
     app.state.archive = archive
     app.include_router(router, prefix="/api")

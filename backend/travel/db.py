@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from . import models
 from .config import DB_FILENAME
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 # v1 -> v2（M2，见 import-draft.md §7）：
 #   独立 trail 表并入 visit（visit 自增轨迹增强列）后删除；transport_leg 增 price。
@@ -23,6 +23,51 @@ _V1_TO_V2_SQL = (
     "ALTER TABLE visit ADD COLUMN drawn_geojson TEXT",
     "ALTER TABLE visit ADD COLUMN difficulty TEXT",
     "ALTER TABLE transport_leg ADD COLUMN price REAL",
+)
+
+# v2 -> v3（M4 路书，ADR-0008）：新增路书 + 途经点 + 线上停靠标注三张表（纯增量建表）。
+_V2_TO_V3_SQL = (
+    """
+    CREATE TABLE IF NOT EXISTS routebook (
+        id INTEGER PRIMARY KEY,
+        name TEXT NOT NULL,
+        mode TEXT NOT NULL DEFAULT 'driving',
+        preset TEXT NOT NULL DEFAULT 'balanced',
+        mileage_km REAL,
+        mileage_manual BOOLEAN NOT NULL DEFAULT 0,
+        geometry_source TEXT NOT NULL DEFAULT 'engine',
+        geometry_json TEXT,
+        created_epoch REAL,
+        updated_epoch REAL
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS route_point (
+        id INTEGER PRIMARY KEY,
+        routebook_id INTEGER NOT NULL REFERENCES routebook(id) ON DELETE CASCADE,
+        seq INTEGER NOT NULL DEFAULT 0,
+        name TEXT NOT NULL DEFAULT '',
+        lat REAL,
+        lng REAL,
+        pos_kind TEXT NOT NULL DEFAULT 'none',
+        stop_type TEXT,
+        stop_name TEXT NOT NULL DEFAULT '',
+        stop_note TEXT NOT NULL DEFAULT ''
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS route_stop (
+        id INTEGER PRIMARY KEY,
+        routebook_id INTEGER NOT NULL REFERENCES routebook(id) ON DELETE CASCADE,
+        seq INTEGER NOT NULL DEFAULT 0,
+        name TEXT NOT NULL DEFAULT '',
+        lat REAL,
+        lng REAL,
+        pos_kind TEXT NOT NULL DEFAULT 'none',
+        stop_type TEXT NOT NULL DEFAULT 'scene',
+        stop_note TEXT NOT NULL DEFAULT ''
+    )
+    """,
 )
 
 
@@ -56,18 +101,25 @@ def init_schema(engine: Engine) -> None:
 
 
 def _upgrade(conn, current: int) -> None:
-    """版本化迁移链（铁律 3）：仅上移，禁止降级；迁移在事务内完成。"""
-    if current == 1:
-        # 阻塞项先行：有 trail 数据则拒绝迁移（SQLite DDL 会提前提交，必须 guard-first）
-        trail_count = conn.execute(text("SELECT COUNT(*) FROM trail")).scalar()
-        if trail_count:
-            raise RuntimeError(
-                f"trail 表有 {trail_count} 条数据，无法自动并入 visit（M2 已取消独立轨迹表）；"
-                "请先手动备份/迁移后再升级。"
-            )
-        for statement in _V1_TO_V2_SQL:
-            conn.execute(text(statement))
-        conn.execute(text("DROP TABLE IF EXISTS trail"))
-    else:  # pragma: no cover - 防御：未知旧版本
-        raise RuntimeError(f"不支持的 schema 版本起点: {current}")
-    conn.execute(text("UPDATE schema_version SET version = :v"), {"v": SCHEMA_VERSION})
+    """版本化迁移链（铁律 3）：仅上移，禁止降级；迁移在事务内完成，逐级升到当前版本。"""
+    while current < SCHEMA_VERSION:
+        if current == 1:
+            # 阻塞项先行：有 trail 数据则拒绝迁移（SQLite DDL 会提前提交，必须 guard-first）
+            trail_count = conn.execute(text("SELECT COUNT(*) FROM trail")).scalar()
+            if trail_count:
+                raise RuntimeError(
+                    f"trail 表有 {trail_count} 条数据，无法自动并入 visit（M2 已取消独立轨迹表）；"
+                    "请先手动备份/迁移后再升级。"
+                )
+            for statement in _V1_TO_V2_SQL:
+                conn.execute(text(statement))
+            conn.execute(text("DROP TABLE IF EXISTS trail"))
+            current = 2
+        elif current == 2:
+            # 纯增量建表：create_all 已兜底创建，IF NOT EXISTS 保证迁移幂等
+            for statement in _V2_TO_V3_SQL:
+                conn.execute(text(statement))
+            current = 3
+        else:  # pragma: no cover - 防御：未知旧版本
+            raise RuntimeError(f"不支持的 schema 版本起点: {current}")
+        conn.execute(text("UPDATE schema_version SET version = :v"), {"v": current})

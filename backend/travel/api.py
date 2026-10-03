@@ -17,6 +17,8 @@ from .schemas import (
     ParseIn,
     PlaceIn,
     PlacePatch,
+    RouteBookIn,
+    RouteBookPatch,
     TripIn,
     TripPatch,
     VisitIn,
@@ -283,6 +285,88 @@ def delete_media(media_id: int, request: Request) -> None:
 def batch_media(payload: MediaBatchIn, request: Request) -> dict[str, int]:
     try:
         return _archive(request).batch_media(payload.ids, payload.action)
+    except ValueError as exc:
+        raise _bad(exc) from exc
+
+
+@router.get("/routebooks")
+def list_routebooks(request: Request) -> list[dict[str, object]]:
+    return _archive(request).list_routebooks()
+
+
+@router.post("/routebooks", status_code=201)
+def create_routebook(payload: RouteBookIn, request: Request) -> dict[str, object]:
+    try:
+        return _archive(request).create_routebook(
+            payload.name,
+            mode=payload.mode,
+            preset=payload.preset,
+            points=[p.model_dump() for p in payload.points],
+            stops=[s.model_dump() for s in payload.stops],
+        )
+    except ValueError as exc:
+        raise _bad(exc) from exc
+
+
+@router.get("/routebooks/{routebook_id}")
+def get_routebook(routebook_id: int, request: Request) -> dict[str, object]:
+    book = _archive(request).get_routebook(routebook_id)
+    if book is None:
+        raise HTTPException(status_code=404, detail="路书不存在")
+    return book
+
+
+@router.patch("/routebooks/{routebook_id}")
+def update_routebook(routebook_id: int, payload: RouteBookPatch, request: Request) -> dict[str, object]:
+    # model_dump() 已把嵌套 RoutePointIn/RouteStopIn 序列化为 dict，直接透传
+    fields = {k: v for k, v in payload.model_dump().items() if v is not None}
+    try:
+        return _archive(request).update_routebook(routebook_id, fields)
+    except ValueError as exc:
+        raise _bad(exc) from exc
+
+
+@router.post("/routebooks/{routebook_id}/recalc")
+def recalc_routebook(routebook_id: int, request: Request) -> dict[str, object]:
+    """途经点/模式/档位变更 → 重算引擎线（S3）。"""
+    try:
+        return _archive(request).recalc_routebook(routebook_id)
+    except ValueError as exc:
+        raise _bad(exc) from exc
+
+
+@router.post("/routebooks/import", status_code=201)
+async def import_routebook(request: Request, file: UploadFile = File(...)) -> dict[str, object]:
+    """导入路书包 → 新建一本（同名不覆盖，S6）。"""
+    archive = _archive(request)
+    tmp = archive.root / "tmp" / f"routebook_{file.filename or 'import.zip'}"
+    tmp.parent.mkdir(parents=True, exist_ok=True)
+    with tmp.open("wb") as out:
+        while chunk := await file.read(1024 * 1024):
+            out.write(chunk)
+    await file.close()
+    try:
+        return archive.import_routebook(tmp)
+    except ValueError as exc:
+        raise _bad(exc) from exc
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
+@router.get("/routebooks/{routebook_id}/export")
+def export_routebook(routebook_id: int, request: Request) -> FileResponse:
+    archive = _archive(request)
+    try:
+        dest = archive.export_routebook(routebook_id)
+    except ValueError as exc:
+        raise _bad(exc) from exc
+    return FileResponse(dest, media_type="application/zip", filename=dest.name)
+
+
+@router.delete("/routebooks/{routebook_id}", status_code=204)
+def delete_routebook(routebook_id: int, request: Request) -> None:
+    try:
+        _archive(request).delete_routebook(routebook_id)
     except ValueError as exc:
         raise _bad(exc) from exc
 

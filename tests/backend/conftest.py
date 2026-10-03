@@ -39,6 +39,41 @@ def seeded_archive(data_root: Path, tmp_path: Path):
 
 
 @pytest.fixture()
+def greenway_graph():
+    """S3+ 测试用小额路网图（公路 vs 绿道，见 test_routing.py 同构）。"""
+    from travel.routing import RouteEdge, RoutingGraph
+
+    g = RoutingGraph()
+    # 0=S 1=R 2=E 3=G1 4=G2
+    for nid, (lat, lng) in enumerate(
+        [(30.0, 100.0), (30.0, 100.015), (30.0, 100.03), (30.0, 100.01), (30.0, 100.02)]
+    ):
+        g.add_node(nid, lat, lng)
+    for a, b, d in [(0, 1, 1250), (1, 2, 1250), (0, 3, 3000), (3, 4, 3000), (4, 2, 3000)]:
+        g.add_edge(a, RouteEdge(b, d, "tertiary" if b == 1 or a == 1 else "cycleway"))
+        g.add_edge(b, RouteEdge(a, d, "tertiary" if a == 1 or b == 1 else "cycleway"))
+    return g
+
+
+@pytest.fixture()
+def archive_with_graph(data_root: Path, greenway_graph):
+    """挂载轻量路网图的 Archive（用于重算/覆盖测试）。"""
+    instance = Archive(data_root, routing_graph=greenway_graph)
+    yield instance
+    instance.close()
+
+
+@pytest.fixture()
+def client_with_graph(data_root: Path, greenway_graph):
+    """挂载轻量路网图的 HTTP 客户端（重算契约测试）。"""
+    from fastapi.testclient import TestClient
+
+    app = create_app(data_root, routing_graph=greenway_graph)
+    with TestClient(app) as test_client:
+        yield test_client
+
+
+@pytest.fixture()
 def client(data_root: Path):
     from fastapi.testclient import TestClient
 

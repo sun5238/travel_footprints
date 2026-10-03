@@ -111,6 +111,48 @@ class MediaBatchIn(BaseModel):
     action: Literal["unassign", "delete"]
 
 
+# ---------- M4 路书（ADR-0008） ----------
+
+
+class RoutePointIn(BaseModel):
+    name: str = ""
+    lat: float | None = None
+    lng: float | None = None
+    pos_kind: Literal["none", "city", "exact"] = "none"
+    stop_type: Literal["charging", "fuel", "scene", "lodging"] | None = None
+    stop_name: str = ""
+    stop_note: str = ""
+
+
+class RouteStopIn(BaseModel):
+    name: str = ""
+    lat: float | None = None
+    lng: float | None = None
+    pos_kind: Literal["none", "city", "exact"] = "none"
+    stop_type: Literal["charging", "fuel", "scene", "lodging"] = "scene"
+    stop_note: str = ""
+
+
+class RouteBookIn(BaseModel):
+    name: str
+    mode: Literal["driving", "cycling", "walking"] = "driving"
+    preset: str = "balanced"
+    points: list[RoutePointIn] = []
+    stops: list[RouteStopIn] = []
+
+
+class RouteBookPatch(BaseModel):
+    name: str | None = None
+    mode: Literal["driving", "cycling", "walking"] | None = None
+    preset: str | None = None
+    mileage_km: float | None = None
+    mileage_manual: bool | None = None
+    geometry_source: Literal["engine", "override"] | None = None
+    geometry_json: str | None = None
+    points: list[RoutePointIn] | None = None
+    stops: list[RouteStopIn] | None = None
+
+
 class ParseIn(BaseModel):
     text: str
     tz: str = DEFAULT_TIMEZONE

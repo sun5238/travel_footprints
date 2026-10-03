@@ -1,4 +1,4 @@
-"""schema v1 -> v2 迁移测试（铁律 3）：加列、轨迹并入删表、有数据拒迁、全新库直建 v2。
+"""schema v1 -> 当前(v3) 迁移测试（铁律 3）：加列、轨迹并入删表、有数据拒迁、全新库直建当前版本。
 
 以 raw SQL 模拟 v1 数据根，再用 Archive 打开触发迁移，验证列/数据/版本。
 """
@@ -91,11 +91,18 @@ def _version(db: Path) -> int:
     return version
 
 
-def test_v1_opens_and_migrates_to_v2_with_data_intact(data_root):
+def _tables(db: Path) -> set[str]:
+    conn = sqlite3.connect(db)
+    names = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    conn.close()
+    return names
+
+
+def test_v1_opens_and_migrates_to_current_with_data_intact(data_root):
     _make_v1_db(data_root)
     archive = Archive(data_root)
 
-    assert _version(data_root / "travel.db") == 2
+    assert _version(data_root / "travel.db") == 3
     visit_cols = _columns(data_root / "travel.db", "visit")
     assert {"label", "companions", "pos_kind", "gpx_path", "drawn_geojson", "difficulty"} <= visit_cols
     assert _columns(data_root / "travel.db", "transport_leg") >= {"price"}
@@ -118,6 +125,9 @@ def test_v1_opens_and_migrates_to_v2_with_data_intact(data_root):
     conn.close()
     assert trail_exists == 0
 
+    # v3：路书表已建立
+    assert {"routebook", "route_point", "route_stop"} <= _tables(data_root / "travel.db")
+
     archive.update_visit(visits[0]["id"], {"label": "城市漫游", "rating": 4})
     updated = archive.list_visits()[0]
     assert updated["label"] == "城市漫游" and updated["rating"] == 4
@@ -133,23 +143,21 @@ def test_v1_with_trail_rows_refuses_migration(data_root):
     assert "label" not in _columns(data_root / "travel.db", "visit")
 
 
-def test_fresh_root_is_v2_and_has_no_trail(data_root):
+def test_fresh_root_is_current_and_has_no_trail(data_root):
     archive = Archive(data_root)
     archive.close()
     db = data_root / "travel.db"
-    assert _version(db) == 2
+    assert _version(db) == 3
     assert "label" in _columns(db, "visit")
     assert "price" in _columns(db, "transport_leg")
-    conn = sqlite3.connect(db)
-    names = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-    conn.close()
-    assert "trail" not in names
+    assert {"routebook", "route_point", "route_stop"} <= _tables(db)
+    assert "trail" not in _tables(db)
 
 
 def test_reopen_is_idempotent(data_root):
     _make_v1_db(data_root)
     Archive(data_root).close()
     second = Archive(data_root)  # 再开不应重复迁移/报错
-    assert _version(data_root / "travel.db") == 2
+    assert _version(data_root / "travel.db") == 3
     assert len(second.list_visits()) == 1  # 旧行未被破坏
     second.close()

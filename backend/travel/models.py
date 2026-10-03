@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import BigInteger, Float, ForeignKey, Index, Integer, Text
+from sqlalchemy import BigInteger, Boolean, Float, ForeignKey, Index, Integer, Text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 from .config import DEFAULT_TIMEZONE
@@ -99,6 +99,61 @@ class TransportLeg(Base):
     note: Mapped[str] = mapped_column(Text, default="")
     sort_order: Mapped[int] = mapped_column(Integer, default=0)
     price: Mapped[float | None] = mapped_column(Float, nullable=True)  # 票价（M2，可空）
+
+
+class RouteBook(Base):
+    """路书（M4 规划，独立模块；暂不关联 trip/visit，见 ADR-0008）。
+
+    geometry_source: engine | override（引擎生成 / 用户覆盖手画线）
+    """
+
+    __tablename__ = "routebook"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(Text)
+    mode: Mapped[str] = mapped_column(Text, default="driving")  # driving | cycling | walking
+    preset: Mapped[str] = mapped_column(Text, default="balanced")  # balanced | scenic | fast
+    mileage_km: Mapped[float | None] = mapped_column(Float, nullable=True)
+    mileage_manual: Mapped[bool] = mapped_column(Boolean, default=False)
+    geometry_source: Mapped[str] = mapped_column(Text, default="engine")
+    geometry_json: Mapped[str | None] = mapped_column(Text, nullable=True)  # GeoJSON LineString
+    created_epoch: Mapped[float] = mapped_column(Float, default=_now_epoch)
+    updated_epoch: Mapped[float] = mapped_column(Float, default=_now_epoch)
+
+
+class RoutePoint(Base):
+    """路书途经点（起点/途经/终点序列）；坐标三态 none | city | exact；可挂 0..1 停靠标注。"""
+
+    __tablename__ = "route_point"
+    __table_args__ = (Index("ix_route_point_book_seq", "routebook_id", "seq"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    routebook_id: Mapped[int] = mapped_column(ForeignKey("routebook.id", ondelete="CASCADE"))
+    seq: Mapped[int] = mapped_column(Integer, default=0)
+    name: Mapped[str] = mapped_column(Text, default="")
+    lat: Mapped[float | None] = mapped_column(Float, nullable=True)
+    lng: Mapped[float | None] = mapped_column(Float, nullable=True)
+    pos_kind: Mapped[str] = mapped_column(Text, default="none")  # none | city | exact
+    stop_type: Mapped[str | None] = mapped_column(Text, nullable=True)  # charging | fuel | scene | lodging
+    stop_name: Mapped[str] = mapped_column(Text, default="")
+    stop_note: Mapped[str] = mapped_column(Text, default="")
+
+
+class RouteStop(Base):
+    """路书"线上任意位置"停靠标注（非途经点，挂在折线上某处）。"""
+
+    __tablename__ = "route_stop"
+    __table_args__ = (Index("ix_route_stop_book_seq", "routebook_id", "seq"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    routebook_id: Mapped[int] = mapped_column(ForeignKey("routebook.id", ondelete="CASCADE"))
+    seq: Mapped[int] = mapped_column(Integer, default=0)
+    name: Mapped[str] = mapped_column(Text, default="")
+    lat: Mapped[float | None] = mapped_column(Float, nullable=True)
+    lng: Mapped[float | None] = mapped_column(Float, nullable=True)
+    pos_kind: Mapped[str] = mapped_column(Text, default="none")  # none | city | exact
+    stop_type: Mapped[str] = mapped_column(Text, default="scene")  # charging | fuel | scene | lodging
+    stop_note: Mapped[str] = mapped_column(Text, default="")
 
 
 class StoredFile(Base):

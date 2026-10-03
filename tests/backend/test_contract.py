@@ -27,6 +27,14 @@ MEDIA_KEYS = {
 LEG_KEYS = {"id", "trip_id", "from", "to", "mode", "depart", "arrive", "note", "sort_order", "price"}
 TRIP_KEYS = {"id", "name", "note", "start", "end", "tags", "created_epoch", "updated_epoch"}
 DASH_STATS_KEYS = {"cities_lit", "cities", "places", "visits", "media", "media_pending", "label_stats"}
+# M4 路书（ADR-0008）
+ROUTEBOOK_HEADER_KEYS = {
+    "id", "name", "mode", "preset", "mileage_km", "mileage_manual", "geometry",
+    "created_epoch", "updated_epoch",
+}
+ROUTEBOOK_KEYS = ROUTEBOOK_HEADER_KEYS | {"points", "stops"}
+POINT_KEYS = {"id", "name", "lat", "lng", "pos_kind", "stop_type", "stop_name", "stop_note"}
+STOP_KEYS = {"id", "name", "lat", "lng", "pos_kind", "stop_type", "stop_note"}
 
 # 种子数据规模（seed.py 校验后的基准值）
 EXPECTED = {
@@ -287,6 +295,93 @@ def test_legs_contract(seeded_client):
 
     trip2_legs = seeded_client.get(f"/api/trips/{by_name['周末广州行']['id']}/legs").json()
     assert {l["mode"] for l in trip2_legs} == {"大巴", "飞机"}
+
+
+# ---------- 路书（M4，ADR-0008） ----------
+
+def test_routebooks_contract(client):
+    # 空库零值
+    assert client.get("/api/routebooks").json() == []
+
+    resp = client.post(
+        "/api/routebooks",
+        json={
+            "name": "成都骑行路书",
+            "mode": "cycling",
+            "points": [
+                {"name": "成都", "lat": 30.65, "lng": 104.06, "pos_kind": "exact"},
+                {"name": "都江堰", "lat": 30.99, "lng": 103.62, "pos_kind": "exact",
+                 "stop_type": "scene", "stop_name": "都江堰景区", "stop_note": "离堆公园入口"},
+                {"name": "四姑娘山", "lat": 31.2, "lng": 102.9, "pos_kind": "city",
+                 "stop_type": "lodging", "stop_name": "日隆镇民宿"},
+            ],
+            "stops": [
+                {"name": "映秀充电站", "lat": 31.05, "lng": 103.56, "pos_kind": "exact",
+                 "stop_type": "charging", "stop_note": "国网 8 桩"},
+            ],
+        },
+    )
+    assert resp.status_code == 201
+    book = resp.json()
+    _assert_subkeys(book, ROUTEBOOK_KEYS)
+    assert book["mode"] == "cycling"
+    assert book["geometry"] == {"source": "engine", "geojson": None}
+    for p in book["points"]:
+        _assert_subkeys(p, POINT_KEYS)
+        assert p["pos_kind"] in ("none", "city", "exact")
+        assert p["stop_type"] is None or p["stop_type"] in ("charging", "fuel", "scene", "lodging")
+    for st in book["stops"]:
+        _assert_subkeys(st, STOP_KEYS)
+        assert st["stop_type"] in ("charging", "fuel", "scene", "lodging")
+    assert len(book["points"]) == 3 and len(book["stops"]) == 1
+
+    # 列表视图 = 头部字段（无嵌套点集）
+    listed = client.get("/api/routebooks").json()
+    assert len(listed) == 1
+    _assert_subkeys(listed[0], ROUTEBOOK_HEADER_KEYS)
+    assert listed[0]["id"] == book["id"] and listed[0]["mode"] == "cycling"
+
+    # 详情含点/停靠且 id 一致
+    detail = client.get(f"/api/routebooks/{book['id']}").json()
+    _assert_subkeys(detail, ROUTEBOOK_KEYS)
+    assert [p["id"] for p in detail["points"]] == [p["id"] for p in book["points"]]
+    assert detail["points"][1]["stop_name"] == "都江堰景区"
+
+    # PATCH：头部字段 + 替换点集
+    patched = client.patch(
+        f"/api/routebooks/{book['id']}",
+        json={"name": "成都骑行路线", "preset": "greenway", "mileage_km": 126.4},
+    ).json()
+    assert patched["name"] == "成都骑行路线" and patched["preset"] == "greenway"
+    assert patched["mileage_km"] == 126.4 and patched["mileage_manual"] is True
+
+    patched2 = client.patch(
+        f"/api/routebooks/{book['id']}", json={"points": [{"name": "映秀", "pos_kind": "none"}]}
+    ).json()
+    assert len(patched2["points"]) == 1 and patched2["points"][0]["name"] == "映秀"
+
+    # DELETE
+    assert client.delete(f"/api/routebooks/{book['id']}").status_code == 204
+    assert client.get("/api/routebooks").json() == []
+    assert client.get(f"/api/routebooks/{book['id']}").status_code == 404
+    assert client.delete(f"/api/routebooks/{book['id']}").status_code == 400
+
+
+def test_routebook_invalid_mode_422(client):
+    """mode 由 Pydantic Literal 校验，非法值返回 422（与 Place.kind 先例一致）。"""
+    resp = client.post("/api/routebooks", json={"name": "x", "mode": "flying"})
+    assert resp.status_code == 422
+    assert "mode" in resp.json()["detail"][0]["loc"]
+
+
+def test_routebook_invalid_kind_422(client):
+    """pos_kind / stop_type 由 Pydantic Literal 校验，非法值返回 422。"""
+    resp = client.post(
+        "/api/routebooks",
+        json={"name": "x", "points": [{"name": "p", "pos_kind": "void"}]},
+    )
+    assert resp.status_code == 422
+    assert "pos_kind" in resp.json()["detail"][0]["loc"]
 
 
 # ---------- 备份与恢复（二进制语义） ----------

@@ -46,8 +46,11 @@ travel_data/
 - `pending_bucket`：待精分。无法挂到具体 POI 的媒体先挂行程/城市级，状态位区分“已归类/待精分”。
 - `correction`：解析标注库。原文 -> 人工确认后的标准 JSON，供将来本地模型使用。**本期（M2 只切不认路线）不建，仅预留接口位。**
 - `dictionary`：学习词典。用户校正时新学到的词（店名/动词/日期写法等）。**本期（M2 只切不认路线）不建，仅预留接口位。**
+- `routebook`：路书（M4 规划，独立模块，ADR-0008）。名称、模式（driving/cycling/walking，默认 driving）、偏好档位（preset，默认 balanced）、里程（引擎路网真值，可手动改并标 `mileage_manual`，重算不吞手动值）、线几何（`geometry_source` = engine/override，`geometry_json` 存 GeoJSON LineString）。
+- `route_point`：路书途经点（起点/途经/终点序列）。坐标三态 `pos_kind` = none/city/exact，可挂 0..1 停靠标注（stop_type = charging/fuel/scene/lodging + stop_name + stop_note）。
+- `route_stop`：路书"线上任意位置"停靠标注（非途经点，挂在折线上某处，字段同 route_point 的停靠标注）。
 
-层级关系：`city 1:N poi`，`poi 1:N visit`，`visit 1:N media`；`trip` 聚合城市/POI/交通段/visit（含带轨迹的 visit，轨迹是 visit 的可选增强，不再单设轨迹实体）。
+层级关系：`routebook 1:N route_point`，`routebook 1:N route_stop`，均级联删除。暂不关联 trip/visit；**路书不点亮城市**（规划不构成到访，ADR-0008）。
 点亮规则：全局地图 = 有 visit 记录的城市点亮；**只有 visit 才点亮**——仅出现在交通段中的城市（路过）不点亮，只在行程详情中可见；进入城市 = 该城市内 POI 点亮。
 
 时间规则：所有实体时间以「本地挂钟时间 + IANA 时区」存储，同时派生 Unix 时间戳用于排序与聚类；日志解析默认使用当前时区，媒体保留 EXIF 时间戳与 offset 原样提取。
@@ -110,6 +113,7 @@ travel_data/
 | 只看离线瓦片 | 无 | 开 |
 | 在线底图瓦片 | IP、浏览视口/中心坐标、缩放级别、请求时间；带 key 时关联应用画像 | 关 |
 | 地理编码 / POI 搜索 | 具体坐标与查询词（“你在查哪家店”） | 关（不做该功能） |
+| 路书导航交接深链（起终点/途经 → 高德/腾讯） | 起终点/途经坐标与名称；在线打开外部导航 app | 关（逐次确认，ADR-0008） |
 
 - 自己的数据（照片/评价/店名文字）不经任何网络动作外发。
 - 全软件无账号、无登录；局域网访问不做鉴权体系，如需可加一次性访问口令（后置）。
@@ -122,6 +126,7 @@ travel_data/
 - M1 最小可用（约 2-3 周业余）：数据模型 + 点亮地图 + 城市/POI/visit CRUD + 媒体上传查看 + 备份导出。
 - M2 导入管道（约 2-3 周）：统一 `@` 标签只切不认解析（切行/剥时间/命中已知城市/封闭剥离）+ 骨架草案校正 + 媒体分组挂靠 + 待精分桶 + 看板/时间轴/过滤（含活动标签统计）。
 - M3 轨迹与地图完善（约 1-2 周）：GPX 导入 + 无 GPX 轨迹 + 离线瓦片包管理更新。
+- M4 路书（依赖 M3 离线瓦片落地，ADR-0008）：路书库 CRUD（routebook/point/stop 三表）+ 进程内自建轻量路由（三模式×档位边权 + 多途经点 A*）+ 途经点增删/拖动重算 + 覆盖几何/里程手动 + GPX/zip 双轨导出 + 导航交接（腾讯 riding 深链/高德/文本兜底）。PBF→路网构建工具按"构建时可选在线"，引入 pyrosm/osmium 单独确认。**后端已实现（schema v3 + 路由引擎 + 重算 + 覆盖/里程 + GPX + zip + 导航合约）；前端路书页与地图编辑器待做。**
 
 ## 11. 留白默认值 / 开放项
 
@@ -130,4 +135,5 @@ travel_data/
 - 合并同名 POI：手动触发，可用“这两个是同一家”语义。
 - 全文搜索：M1 用 SQL LIKE，M2 升级 SQLite FTS5 + jieba 中文分词。
 - 待评估：Tailscale 远程同步、本地模型解析开关、增量合并导入（zip 增量 upsert + 媒体哈希去重）。
+- 路书后置项（ADR-0008）：DEM 爬升/海拔剖面、细粒权重 GUI、社区绿道补充路网包、切换 Valhalla、路书并入 trip/visit 结账流程、PBF→区域路网包构建工具（pyrosm/osmium 引入需与用户确认）。
 - **明确不做**：在线地理编码 / POI 搜索（「输入店名 → 分店列表」需注册开发者账号 + 外发查询词，不合铁律 1；离线无等价数据源）。坐标来源仅靠照片 EXIF GPS → 校正页地图点选 → 留空坐标态三级兜底（见 [import-draft.md](import-draft.md) §3）。

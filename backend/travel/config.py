@@ -18,5 +18,5 @@ def resolve_data_root(override: str | Path | None = None) -> Path:
 
 
 def ensure_layout(root: Path) -> None:
-    for name in ("media", "thumbs", "exports", "tmp"):
+    for name in ("media", "thumbs", "exports", "tmp", "routing"):
         (root / name).mkdir(parents=True, exist_ok=True)

@@ -8,8 +8,10 @@ PBF→路网构建工具切片（构建时可选在线，另行确认依赖）�
 from __future__ import annotations
 
 import heapq
+import json
 import math
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 # 类别基础系数（权重 = 距离km × 系数；系数越小越偏好）。
@@ -105,6 +107,25 @@ class RoutingGraph:
     def add_edge(self, frm: int, edge: RouteEdge) -> None:
         self.adj.setdefault(frm, []).append(edge)
 
+    def to_pack(self) -> dict[str, Any]:
+        """序列化为紧凑 JSON 结构（区域路网包）。"""
+        nodes = [[nid, lat, lng] for nid, (lat, lng) in self.nodes.items()]
+        edges = [
+            [frm, e.target, e.distance_m, e.category]
+            for frm, es in self.adj.items()
+            for e in es
+        ]
+        return {"nodes": nodes, "edges": edges}
+
+    @classmethod
+    def from_pack(cls, data: dict[str, Any]) -> "RoutingGraph":
+        g = cls()
+        for nid, lat, lng in data["nodes"]:
+            g.add_node(int(nid), float(lat), float(lng))
+        for frm, target, distance_m, category in data["edges"]:
+            g.add_edge(int(frm), RouteEdge(int(target), float(distance_m), str(category)))
+        return g
+
 
 def _edge_cost(
     graph: RoutingGraph,
@@ -188,6 +209,22 @@ def _edges_between(graph: RoutingGraph, frm: int, target: int) -> RouteEdge | No
         if e.target == target:
             return e
     return None
+
+
+def save_pack(graph: RoutingGraph, path: Path) -> Path:
+    """把路线图序列化为区域路网包（JSON，紧凑数组）。"""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(graph.to_pack(), ensure_ascii=False), encoding="utf-8")
+    return path
+
+
+def load_pack(path: Path) -> RoutingGraph:
+    """从区域路网包文件还原 RoutingGraph；损坏即报错。"""
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (ValueError, OSError) as exc:
+        raise ValueError(f"路网包损坏/不可读: {path}") from exc
+    return RoutingGraph.from_pack(raw)
 
 
 def plan_route(

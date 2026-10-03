@@ -13,7 +13,7 @@ from sqlalchemy.engine import Engine
 from . import backup
 from . import city_coords as city_coords_table
 from . import media as media_lib
-from .routing import RoutingGraph, plan_route
+from .routing import RoutingGraph, load_pack, plan_route
 from .routebook_pack import read_routebook_zip, write_routebook_zip
 from .config import DEFAULT_TIMEZONE, ensure_layout, resolve_data_root
 from .db import connect
@@ -153,6 +153,16 @@ class Archive:
         self._engine.dispose()
         ensure_layout(self.root)
         self._engine, self._factory = connect(self.root)
+
+    def _load_routing_pack(self) -> RoutingGraph | None:
+        """数据根 routing/pack.json 存在则载入路由图（惰性，仅首次 recalc 触发）。"""
+        pack_path = self.root / "routing" / "pack.json"
+        if not pack_path.exists():
+            return None
+        try:
+            return load_pack(pack_path)
+        except ValueError:
+            return None
 
     def abs_path(self, rel: str) -> Path:
         return self.root / rel
@@ -696,7 +706,9 @@ class Archive:
             if book.geometry_source == "override":
                 raise ValueError("当前为手绘覆盖线，重算不会覆盖；如需引擎线请先清除覆盖")
         if self._routing_graph is None:
-            raise ValueError("未配置路网图（请先安装区域路网包）")
+            self._routing_graph = self._load_routing_pack()
+            if self._routing_graph is None:
+                raise ValueError("未配置路网图（请先建区域路网包并放入数据根 routing/pack.json，见 scripts/build-routing-pack.sh）")
         pois = [
             (st["lat"], st["lng"]) for st in stops if st["lat"] is not None and st["lng"] is not None
         ]

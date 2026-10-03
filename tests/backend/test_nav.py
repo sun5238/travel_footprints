@@ -55,3 +55,22 @@ def test_walking_supported_on_both():
     links = nav_links("徒步", "walking", [S, E])
     assert links["tencent"] and "mode=walking" in links["tencent"]
     assert links["amap"] and "mode=walking" in links["amap"]
+
+
+def test_nav_endpoint_contract(client):
+    """路书导航交接 HTTP 端点：返回三件套（腾讯/高德深链 + 文本兜底）。"""
+    book = client.post(
+        "/api/routebooks", json={"name": "自驾", "mode": "driving", "points": [S, E]}
+    ).json()
+    resp = client.get(f"/api/routebooks/{book['id']}/nav")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert set(body) == {"tencent", "amap", "text"}
+    assert "uri.amap.com" in (body["amap"] or "")
+    assert "uri/v1/routeplan" in (body["tencent"] or "")
+
+
+def test_nav_endpoint_missing_400(client):
+    resp = client.get("/api/routebooks/999999/nav")
+    assert resp.status_code == 400
+    assert "路书不存在" in resp.json()["detail"]

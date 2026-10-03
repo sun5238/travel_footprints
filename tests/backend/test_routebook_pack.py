@@ -165,6 +165,22 @@ def test_export_api_missing_400(client):
     assert "路书不存在" in resp.json()["detail"]
 
 
+def test_export_gpx_api(client):
+    book = client.post(
+        "/api/routebooks", json={"name": "骑行", "mode": "cycling", "points": [S, E]}
+    ).json()
+    resp = client.get(f"/api/routebooks/{book['id']}/export.gpx")
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith("text/xml")
+    assert b"<rte>" in resp.content and b"<rtept" in resp.content
+
+
+def test_export_gpx_api_missing_400(client):
+    resp = client.get("/api/routebooks/999999/export.gpx")
+    assert resp.status_code == 400
+    assert "路书不存在" in resp.json()["detail"]
+
+
 def test_import_api_creates_book(client_with_graph):
     book = client_with_graph.post(
         "/api/routebooks", json={"name": "骑行", "mode": "cycling", "points": [S, E]}

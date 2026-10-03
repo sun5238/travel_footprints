@@ -13,6 +13,8 @@ from sqlalchemy.engine import Engine
 from . import backup
 from . import city_coords as city_coords_table
 from . import media as media_lib
+from .gpx import routebook_to_gpx
+from .nav import nav_links
 from .routing import RoutingGraph, load_pack, plan_route
 from .routebook_pack import read_routebook_zip, write_routebook_zip
 from .config import DEFAULT_TIMEZONE, ensure_layout, resolve_data_root
@@ -781,6 +783,20 @@ class Archive:
             points = _fetch_route_points(s, routebook_id)
             stops = _fetch_route_stops(s, routebook_id)
             return _routebook_dict(book, points, stops)
+
+    def export_routebook_gpx(self, routebook_id: int) -> str:
+        """路书 → GPX 1.1 `<rte>` 文本（S5/S6，供浏览器下载）。"""
+        book = self.get_routebook(routebook_id)
+        if book is None:
+            raise ValueError(f"路书不存在: {routebook_id}")
+        return routebook_to_gpx(book["name"], book["points"])
+
+    def routebook_nav(self, routebook_id: int) -> dict[str, Any]:
+        """路书导航交接三件套（S7：腾讯/高德深链 + 文本兜底）。"""
+        book = self.get_routebook(routebook_id)
+        if book is None:
+            raise ValueError(f"路书不存在: {routebook_id}")
+        return nav_links(book["name"], book["mode"], book["points"])
 
     def export_routebook(self, routebook_id: int) -> Path:
         """把路书打成自包含 zip（exports/routebook-<id>.zip）。"""

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
+from fastapi import APIRouter, File, Form, HTTPException, Request, Response, UploadFile
 from fastapi.responses import FileResponse
 
 from .config import DEFAULT_TIMEZONE
@@ -361,6 +361,31 @@ def export_routebook(routebook_id: int, request: Request) -> FileResponse:
     except ValueError as exc:
         raise _bad(exc) from exc
     return FileResponse(dest, media_type="application/zip", filename=dest.name)
+
+
+@router.get("/routebooks/{routebook_id}/export.gpx")
+def export_routebook_gpx(routebook_id: int, request: Request) -> Response:
+    """路书 → GPX 1.1 `<rte>`（给两步路/OsmAnd/Garmin/高德导入）。"""
+    archive = _archive(request)
+    try:
+        xml_text = archive.export_routebook_gpx(routebook_id)
+    except ValueError as exc:
+        raise _bad(exc) from exc
+    return Response(
+        xml_text,
+        media_type="text/xml",
+        headers={"Content-Disposition": 'attachment; filename="routebook.gpx"'},
+    )
+
+
+@router.get("/routebooks/{routebook_id}/nav")
+def routebook_nav(routebook_id: int, request: Request) -> dict[str, object]:
+    """路书导航交接三件套（腾讯/高德深链 + 文本兜底）。"""
+    archive = _archive(request)
+    try:
+        return archive.routebook_nav(routebook_id)
+    except ValueError as exc:
+        raise _bad(exc) from exc
 
 
 @router.delete("/routebooks/{routebook_id}", status_code=204)

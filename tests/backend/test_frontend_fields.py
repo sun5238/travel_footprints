@@ -13,7 +13,8 @@ from pathlib import Path
 FRONTEND_APP = Path(__file__).resolve().parents[2] / "frontend" / "app.js"
 
 # 前端从响应数据对象读取字段的容器变量（模板 {{ }} + JS 点访问均扫描）
-_CONTAINER = r"(?:v|p|c|m|t|place|selectedPlace)"
+# M4 路书：rbList / rbEditor / b（v-for 中的路书卡片）
+_CONTAINER = r"(?:v|p|c|m|t|place|selectedPlace|rbList|rbEditor|b)"
 _FIELD = r"[a-zA-Z_][a-zA-Z0-9_]*"
 
 # 捕获形如 v.rating / p.city_id / dashboard.stats.cities_lit / at.local 的读取
@@ -28,7 +29,15 @@ _DASH_TOP = re.compile(r"\bdashboard\.({_FIELD})\b")
 # - value：Vue ref 解包访问（dashboard.value 等），不是响应字段
 # - role：地图 feature 属性（p.role），不是后端 place/city 响应字段
 # - get / has / set：JS Map 方法名，可能被全文件扫描误当作字段名
-_KNOWN_MISSING = {"city", "value", "role", "get", "has", "set"}
+# - M4 路书：rbEditor/点的本地状态字段（后端以 snake_case 返回，camel 为前端本地态）
+_KNOWN_MISSING = {
+    "city", "value", "role", "get", "has", "set",
+    "source", "line", "nav", "mileageKm", "mileageManual", "drawMode",
+    "overrideGeo", "error", "dirty",
+    "posKind", "hasCoords", "stopType", "stopName", "stopNote",
+    # m.remove() 是 MapLibre Marker 方法名，不是数据字段
+    "remove",
+}
 
 
 def _app_field_names(src: str) -> set[str]:
@@ -72,8 +81,16 @@ def _response_key_universe(client) -> set[str]:
     if first_trip_id is not None:
         probes.append(client.get(f"/api/trips/{first_trip_id}").json())
         probes.append(client.get(f"/api/trips/{first_trip_id}/legs").json())
+    # M4 路书：临时建一本抓列表+详情（含 points/stops/geometry 形状），随后删掉保持种子干净
+    probe_book_id = None
+    created = client.post("/api/routebooks", json={"name": "探针路书"}).json()
+    probe_book_id = created["id"]
+    probes.append(client.get("/api/routebooks").json())
+    probes.append(client.get(f"/api/routebooks/{probe_book_id}").json())
     for probe in probes:
         walk(probe)
+    if probe_book_id is not None:
+        client.delete(f"/api/routebooks/{probe_book_id}")
     return keys
 
 
